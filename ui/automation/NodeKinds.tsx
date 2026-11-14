@@ -1,6 +1,6 @@
-import { TablerIcon } from '@ein/ui/components';
+import { ListFilterInput, TablerIcon } from '@ein/ui/components';
 import { matchesText } from '@ein/ui/lib';
-import { Box, Stack, Text, TextInput, ThemeIcon, UnstyledButton } from '@mantine/core';
+import { Box, Stack, Text, ThemeIcon, UnstyledButton } from '@mantine/core';
 import { useState } from 'react';
 import { KINDS } from '../../lib/automations/catalog.ts';
 
@@ -26,14 +26,7 @@ export function NodeKinds({ onAdd }: { onAdd: (type: string) => void }) {
         <Text fw={600}>Add a node</Text>
         <Text size='xs' c='dimmed'>It lands in the middle of what is in view. Select a card to set it up.</Text>
       </Box>
-      <TextInput
-        size='sm'
-        placeholder='Filter the kinds'
-        leftSection={<TablerIcon name='search' size={16} />}
-        value={filter}
-        onChange={(event) => setFilter(event.currentTarget.value)}
-        aria-label='Filter the kinds of node'
-      />
+      <ListFilterInput size='sm' what='kinds' value={filter} onChange={setFilter} />
       {GROUPS.map(({ group, label }) => {
         const shown = kinds.filter((kind) => kind.group === group);
         if (!shown.length) return null;
