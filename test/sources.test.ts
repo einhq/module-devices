@@ -254,7 +254,7 @@ Deno.test('ha-discovery: lights with brightness and colour', async (t) => {
 });
 
 Deno.test('shelly: a plug and a four-button input', async (t) => {
-  const source = createShelly({ src: 'ein-automation-test' });
+  const source = createShelly({ src: 'ein-devices-test' });
 
   await t.step('a status makes the prefix a device, which is asked what it is', () => {
     const updates = source.decode(shellyPlug.switchStatus.topic, shellyPlug.switchStatus.payload, false);
@@ -265,7 +265,7 @@ Deno.test('shelly: a plug and a four-button input', async (t) => {
   });
 
   await t.step('the switch is an entity that can be set, beside its power, energy and temperature', () => {
-    const fresh = createShelly({ src: 'ein-automation-test' });
+    const fresh = createShelly({ src: 'ein-devices-test' });
     const updates = fresh.decode(shellyPlug.switchStatus.topic, shellyPlug.switchStatus.payload, false);
     assertEquals(of(updates, 'entity').map((entity) => [entity.entity, entity.entityKind, entity.unit ?? '', entity.settable]), [
       ['switch-0', 'switch', '', true],
@@ -321,7 +321,7 @@ Deno.test('shelly: a plug and a four-button input', async (t) => {
     const set = source.encode({ device: 'hall-plug', entity: 'switch-0', value: 'off' });
     assertEquals(set?.[0].topic, 'hall-plug/rpc');
     const call = JSON.parse(set![0].payload);
-    assertEquals([call.src, call.method, call.params], ['ein-automation-test', 'Switch.Set', { id: 0, on: false }]);
+    assertEquals([call.src, call.method, call.params], ['ein-devices-test', 'Switch.Set', { id: 0, on: false }]);
     assertEquals(JSON.parse(source.encode({ device: 'hall-plug', entity: 'switch-0', value: 'on' })![0].payload).params, { id: 0, on: true });
     assertEquals(source.encode({ device: 'hall-plug', entity: 'switch-0-power', value: 'on' }), undefined);
   });

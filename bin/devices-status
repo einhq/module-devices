@@ -1,0 +1,135 @@
+#!ts
+/**
+ * devices-status — whether the bridge hears the broker, which drivers it registered and how many
+ * devices they drive, and whether the sidecar is one this module speaks; or whether the restreamer
+ * answers.
+ *
+ *   devices-status                 everything, as JSON in JSON mode
+ *   devices-status --brief         one line, for the services list
+ *   devices-status --checks        the checks `health` reads
+ *   devices-status --streams       whether the restreamer answers, as JSON in JSON mode
+ */
+
+import type { DeviceAttrs } from '@ein/api';
+import type { CmdReturn, Command, HealthCheck } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags, serviceKey } from '@ein/client';
+import { DEV_PATH, devicePath } from '@ein/paths';
+import type { DevicesStatus, RestreamerStatus } from '@devices/api';
+import { createRestreamer } from '@devices/cameras';
+import { POLLED_DRIVERS } from '@devices/network';
+import { sidecarProblem } from '@devices/sidecar';
+import { SOURCE_NAMES } from '@devices/sources';
+import { bridgeState } from '@devices/state';
+
+const ENDPOINT_TYPES = new Set(['log', 'track', 'control']);
+
+/** The devices under /dev the caller sees that this module's drivers drive, and their endpoints. */
+const counts = async (cmd: Command): Promise<{ devices: number; endpoints: number }> => {
+  const children = await cmd.sys.vfs.children<DeviceAttrs>(cmd.access, DEV_PATH).catch(() => []);
+  const ours = children.filter((child) => child.node.type === 'device' && [...SOURCE_NAMES, ...POLLED_DRIVERS].includes(child.node.attrs.driver ?? ''));
+  const endpoints = await Promise.all(
+    ours.map(async (child) => (await cmd.sys.vfs.children(cmd.access, devicePath(child.name)).catch(() => [])).filter((each) => ENDPOINT_TYPES.has(each.node.type)).length),
+  );
+  return { devices: ours.length, endpoints: endpoints.reduce((sum, each) => sum + each, 0) };
+};
+
+const statusOf = async (cmd: Command): Promise<DevicesStatus> => {
+  const url = (cmd.env.CFG_DEVICES_MQTT_URL ?? '').trim();
+  const state = bridgeState();
+  const sidecar = sidecarOf(state);
+  return {
+    configured: url !== '',
+    ...(url ? { url } : {}),
+    running: state !== undefined,
+    connected: state?.connected ?? false,
+    ...(state ? { since: new Date(state.since).toISOString() } : {}),
+    drivers: state?.drivers ?? [],
+    ...await counts(cmd),
+    messages: state?.messages ?? 0,
+    unsupported: state?.notes() ?? [],
+    ...(state?.lastError ? { lastError: state.lastError } : {}),
+    ...(sidecar ? { sidecar } : {}),
+  };
+};
+
+/** The sidecar as its network listener last reported it, when it has been heard. */
+const sidecarOf = (state: ReturnType<typeof bridgeState>): DevicesStatus['sidecar'] => {
+  const status = state?.network.status;
+  if (!status?.round) return undefined;
+  const problem = sidecarProblem(status.version);
+  return { ...(status.version ? { version: status.version } : {}), ...(problem ? { problem } : {}) };
+};
+
+/** The restreamer, asked for its streams as the bridge signs in to it. */
+const restreamerOf = async (cmd: Command): Promise<RestreamerStatus> => {
+  const url = (cmd.env.CFG_DEVICES_STREAMS_URL ?? '').trim();
+  if (!url) return { configured: false, answering: false };
+  const rtsp = (cmd.env.CFG_DEVICES_STREAMS_RTSP ?? '').trim();
+  const said = { configured: true, url, ...(rtsp ? { rtsp } : {}) };
+  try {
+    const restreamer = createRestreamer(fetch, url, await serviceKey(cmd, 'CFG_DEVICES_STREAMS_KEY', 'CFG_DEVICES_STREAMS_URL') ?? '', rtsp);
+    return { ...said, answering: true, streams: (await restreamer.names()).size };
+  } catch (error) {
+    return { ...said, answering: false, error: error instanceof Error ? error.message : String(error) };
+  }
+};
+
+const brief = (status: DevicesStatus): string => {
+  if (!status.running) return 'not running';
+  if (!status.configured) return `${status.devices} devices, ${status.endpoints} endpoints; no broker set, so only the devices asked over the network are read`;
+  if (!status.connected) return `cannot reach ${status.url}${status.lastError ? `: ${status.lastError}` : ''}`;
+  return `${status.devices} devices, ${status.endpoints} endpoints, ${status.messages} messages`;
+};
+
+const checks = (status: DevicesStatus): HealthCheck[] => {
+  if (!status.running) return [{ name: 'devices bridge', state: 'fail', reason: 'the devices-bridge service is not running' }];
+  const sidecar: HealthCheck[] = status.sidecar?.problem ? [{ name: 'devices sidecar', state: 'fail', reason: status.sidecar.problem }] : [];
+  if (!status.configured) return [{ name: 'devices bridge', state: 'ok', reason: brief(status) }];
+  if (!status.connected) {
+    return [{ name: 'devices bridge', state: 'warn', reason: `cannot reach the broker at ${status.url}${status.lastError ? `: ${status.lastError}` : ''}` }];
+  }
+  return [{ name: 'devices bridge', state: 'ok', reason: brief(status) }, ...sidecar];
+};
+
+const devicesStatus = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { boolean: ['brief', 'checks', 'streams'], unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+  if (flags.streams) {
+    const streams = await restreamerOf(cmd);
+    if (cmd.json) await cmd.writeJSON(streams satisfies RestreamerStatus);
+    else if (!streams.configured) await cmd.writeLn('no restreamer is set');
+    else await cmd.writeLn(streams.answering ? `${streams.url}: ${streams.streams} streams` : `${streams.url}: ${streams.error}`);
+    return 0;
+  }
+  const status = await statusOf(cmd);
+  if (flags.checks) {
+    await cmd.writeJSON(checks(status) satisfies HealthCheck[]);
+  } else if (flags.brief || !cmd.json) {
+    await cmd.writeLn(brief(status));
+    if (!flags.brief) {
+      if (status.drivers.length) await cmd.writeLn(`drivers: ${status.drivers.join(', ')}`);
+      for (const note of status.unsupported) await cmd.writeLn(`  not read: ${note}`);
+    }
+  } else {
+    await cmd.writeJSON(status satisfies DevicesStatus);
+  }
+  return 0;
+};
+
+devicesStatus.spec = {
+  name: 'devices-status',
+  effect: 'read' as const,
+  description:
+    'Whether the devices bridge hears the MQTT broker, which drivers it registered, how many devices under /dev they drive, what they cannot read, and whether the sidecar is one this module speaks; or whether the restreamer answers',
+  flags: [
+    { name: 'brief', type: 'bool' as const, description: 'one line, as the services list shows it' },
+    { name: 'checks', type: 'bool' as const, description: 'the checks health reads, as JSON' },
+    { name: 'streams', type: 'bool' as const, description: 'whether the restreamer answers, and how many streams it has' },
+  ],
+  examples: ['devices-status', 'devices-status --brief', 'devices-status --streams'],
+  returns:
+    'DevicesStatus: configured, url, running, connected, since, drivers, devices, endpoints, messages, unsupported, lastError, sidecar {version, problem}; with --streams, RestreamerStatus: configured, url, rtsp, answering, streams, error',
+};
+
+export default devicesStatus;

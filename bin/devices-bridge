@@ -1,0 +1,99 @@
+#!ts
+/**
+ * devices-bridge — the devices-bridge service: hears devices on the MQTT broker and drives
+ * them as core's devices under /dev, one driver per source (ha-discovery, shelly), sending them what
+ * is written to their controls, asks the devices of the polled drivers (network, ipp, snmp, cast,
+ * dlna, http), and keeps the cameras of the rtsp driver with the restreamer (CFG_DEVICES_STREAMS_URL).
+ * Videos and pages written to a screen are made into video by the media service, asked as this
+ * service, once the writer's access has been checked; while the media service does not answer, or
+ * makes neither, a screen is given only what it plays as it is.
+ *
+ * While CFG_DEVICES_MQTT_URL is empty it hears no broker and runs the other drivers alone.
+ * It runs until stopped, connecting again whenever the broker goes away.
+ */
+
+import { type Access, type CmdReturn, type Command, serviceKey } from '@ein/client';
+import { runBridge } from '@devices/bridge';
+import { createRestreamer } from '@devices/cameras';
+import { DeviceWriter } from '@devices/drivers';
+import { createPolledDrivers, mediaAddress, type VideoStreamRequest } from '@devices/network';
+import { connectMqtt } from '@devices/mqtt';
+import { createSources } from '@devices/sources';
+import { bridgeState } from '@devices/state';
+import { capabilitiesOf, emsInstance, streamVideo } from '@ems/client';
+import { startPageStream, stopPageStream } from '@ems/page-stream';
+
+const DEFAULT_SOURCES = 'ha-discovery shelly shelly-gen1';
+const DEFAULT_MIN_INTERVAL_SECONDS = 10;
+/** How long the media service is waited for when asked what it makes, as a screen is given something. */
+const MEDIA_SERVICE_WAIT_SECONDS = 3;
+
+const devicesBridge = async (cmd: Command): CmdReturn => {
+  const url = (cmd.env.CFG_DEVICES_MQTT_URL ?? '').trim();
+  const devices = cmd.sys.devices;
+  if (!devices) {
+    await cmd.writeError('devices-bridge: this EiN keeps no devices, so there is nothing to drive\n');
+    return 1;
+  }
+  if (bridgeState()) {
+    await cmd.writeError('devices-bridge: already running\n');
+    return 1;
+  }
+  const stopped = new Promise<void>((resolve) => cmd.onInterrupt(resolve));
+
+  const clientId = `ein-devices-${crypto.randomUUID().slice(0, 8)}`;
+  const names = (cmd.env.CFG_DEVICES_SOURCES || DEFAULT_SOURCES).split(/[\s,]+/).filter(Boolean);
+  const { sources, unknown } = url
+    ? createSources(names, {
+      discoveryPrefix: cmd.env.CFG_DEVICES_DISCOVERY_PREFIX || 'homeassistant',
+      clientId,
+    })
+    : { sources: [], unknown: [] };
+  if (unknown.length) await cmd.writeError(`devices-bridge: no source called ${unknown.join(', ')}\n`);
+  const seconds = Number(cmd.env.CFG_DEVICES_MIN_INTERVAL);
+  const writer = new DeviceWriter({
+    cmd,
+    devices,
+    retention: cmd.env.CFG_DEVICES_HISTORY || '365 day',
+    minInterval: Number.isFinite(seconds) && seconds >= 0 ? seconds : DEFAULT_MIN_INTERVAL_SECONDS,
+    log: (line) => cmd.writeError(`devices-bridge: ${line}\n`).catch(() => {}),
+  });
+  const password = url ? await serviceKey(cmd, 'CFG_DEVICES_MQTT_KEY', 'CFG_DEVICES_MQTT_URL') : undefined;
+  const connect = url ? connectMqtt({ url, clientId, username: cmd.env.CFG_DEVICES_MQTT_USER, password }) : undefined;
+  const streams = (cmd.env.CFG_DEVICES_STREAMS_URL ?? '').trim();
+  const restreamer = streams
+    ? createRestreamer(fetch, streams, await serviceKey(cmd, 'CFG_DEVICES_STREAMS_KEY', 'CFG_DEVICES_STREAMS_URL') ?? '', cmd.env.CFG_DEVICES_STREAMS_RTSP ?? '')
+    : undefined;
+  const media = {
+    vfs: cmd.sys.vfs,
+    devices,
+    address: () => mediaAddress(cmd.env.CFG_DEVICES_MEDIA_URL, bridgeState()?.network.status.broker, cmd.env.CFG_HTTP_PORT),
+    wake: (device: string) => bridgeState()?.pollNow?.(device),
+    streamVideo: async (path: string, { codec, ...request }: VideoStreamRequest) =>
+      (await streamVideo(cmd, path, { ...request, ...(codec ? { sourceCodec: codec } : {}) })).body,
+    streamPage: async (route: string, access: Access) => {
+      const page = await startPageStream(cmd, route, { access });
+      return { path: page.path, stop: async () => void await stopPageStream(cmd, page.id) };
+    },
+    mediaService: async () => {
+      const capabilities = await emsInstance(cmd).then((instance) => capabilitiesOf(cmd, instance, MEDIA_SERVICE_WAIT_SECONDS), () => null);
+      return { video: capabilities?.ops?.includes('video.stream') === true, pages: capabilities?.encode?.page_renderer === true };
+    },
+  };
+  const polled = createPolledDrivers(fetch, media);
+  await runBridge({ cmd, url, connect, sources, polled, restreamer, fetcher: fetch, devices, writer, stopped });
+  return 0;
+};
+
+devicesBridge.spec = {
+  name: 'devices-bridge',
+  admin: true,
+  daemon: true,
+  effect: 'write' as const,
+  json: false,
+  description:
+    'Hear devices on the MQTT broker and drive them as devices under /dev (the ha-discovery and shelly drivers), sending them what is written to their controls (the devices-bridge service)',
+  examples: ['service restart devices-bridge'],
+};
+
+export default devicesBridge;

@@ -1,39 +1,39 @@
 #!ts
 /**
- * automation-found — the devices on the network that the network listener beside the broker heard
+ * devices-found — the devices on the network that the network listener beside the broker heard
  * over mDNS, SSDP and WS-Discovery, what each is, and whether it is a device under /dev already. For members of
  * the devices group.
  *
- *   automation-found              the ones that are no device yet, and not ignored
- *   automation-found --addable    of those, the ones that can become a device of automation's
- *   automation-found --all        every one, devices and ignored ones too
- *   automation-found <id>         one, with everything the listener heard of it
+ *   devices-found              the ones that are no device yet, and not ignored
+ *   devices-found --addable    of those, the ones that can become a device of this module's
+ *   devices-found --all        every one, devices and ignored ones too
+ *   devices-found <id>         one, with everything the listener heard of it
  */
 
 import { type CmdReturn, collectUnknownFlags, type Command, parseArgs, reportUnknownFlags } from '@ein/client';
-import type { FoundAnswer, FoundDetail } from '@automation/api';
-import { assertDevicesMember, readFound, readFoundDetail } from '@automation/network';
+import type { FoundAnswer, FoundDetail } from '@devices/api';
+import { assertDevicesMember, readFound, readFoundDetail } from '@devices/network';
 
 const ago = (iso: string): string => {
   const minutes = Math.round((Date.now() - Date.parse(iso)) / 60_000);
   return minutes < 1 ? 'just now' : minutes < 120 ? `${minutes} min ago` : `${Math.round(minutes / 60)} h ago`;
 };
 
-const automationFound = async (cmd: Command): CmdReturn => {
+const devicesFound = async (cmd: Command): CmdReturn => {
   const unknown: string[] = [];
   const flags = parseArgs(cmd.args, { boolean: ['addable', 'all'], unknown: collectUnknownFlags(unknown) });
   if (await reportUnknownFlags(cmd, unknown)) return 1;
   try {
     await assertDevicesMember(cmd);
   } catch (error) {
-    await cmd.writeError(`automation-found: ${error instanceof Error ? error.message : error}\n`);
+    await cmd.writeError(`devices-found: ${error instanceof Error ? error.message : error}\n`);
     return 1;
   }
   const id = flags._.length ? String(flags._[0]) : undefined;
   if (id) {
     const detail = await readFoundDetail(cmd, id);
     if (!detail) {
-      await cmd.writeError(`automation-found: nothing called ${id} was heard on the network (automation-found --all)\n`);
+      await cmd.writeError(`devices-found: nothing called ${id} was heard on the network (devices-found --all)\n`);
       return 1;
     }
     if (cmd.json) await cmd.writeJSON(detail satisfies FoundDetail);
@@ -42,7 +42,7 @@ const automationFound = async (cmd: Command): CmdReturn => {
   }
   const found = await readFound(cmd);
   if (!found) {
-    await cmd.writeError('automation-found: the automation bridge is not running, so nothing is heard of the network\n');
+    await cmd.writeError('devices-found: the devices bridge is not running, so nothing is heard of the network\n');
     return 1;
   }
   const answer: FoundAnswer = {
@@ -66,19 +66,19 @@ const automationFound = async (cmd: Command): CmdReturn => {
   return 0;
 };
 
-automationFound.spec = {
-  name: 'automation-found',
+devicesFound.spec = {
+  name: 'devices-found',
   effect: 'read' as const,
   description:
     'The devices on the network the network listener heard over mDNS, SSDP and WS-Discovery: what each is, whether it can become a device and whether it is one already (for members of the devices group)',
   flags: [
-    { name: 'addable', type: 'bool' as const, description: 'only the ones that can become a device of automation’s' },
+    { name: 'addable', type: 'bool' as const, description: 'only the ones that can become a device of this module’s' },
     { name: 'all', type: 'bool' as const, description: 'every one, the devices already under /dev and the ignored ones too' },
   ],
   args: [{ name: 'id', type: 'string' as const, optional: true, description: 'one host, by its id or address: it, with all the listener heard of it' }],
-  examples: ['automation-found', 'automation-found --addable', 'automation-found --all', 'automation-found 7c2ebd614055'],
+  examples: ['devices-found', 'devices-found --addable', 'devices-found --all', 'devices-found 7c2ebd614055'],
   returns:
     'FoundAnswer: round, broker, devices [{id, ip, mac, names, seen, services, kind, vendor, label, model, firmware, class, addable, adopt, connect, device, ignored}]; with an id, FoundDetail: one of those and host {ip, mac, names, seen, mdns, ssdp}',
 };
 
-export default automationFound;
+export default devicesFound;

@@ -1,7 +1,7 @@
 /**
  * The network listener, one of the sidecar's three: what announces itself on this machine's network
  * over mDNS (Bonjour, `_shelly._tcp`, `_hap._tcp`, …), SSDP (UPnP: TVs, speakers, routers) and
- * WS-Discovery (ONVIF cameras), published on the broker for the Automation module to name and offer
+ * WS-Discovery (ONVIF cameras), published on the broker for the Devices module to name and offer
  * as devices.
  *
  * It runs on the host's network, since the multicast it asks with stays on the network it is sent
@@ -25,14 +25,24 @@
  *     wsd: [{ endpoint?, types: [], scopes: [], xaddrs: [] }] }
  *
  * An address unheard for DISCOVERY_FORGET seconds (a day by default) is cleared with an empty
- * retained message. `<prefix>/status`, retained, says when the last round was, how many addresses
- * answered it and `broker`, the address the devices that answered reach the broker at: MQTT_HOST
- * when it names one, else this machine's address on the network most of them are on.
+ * retained message, one last heard before the listener started too: its first round reads the
+ * retained hosts' `seen` back from the broker. `<prefix>/status`, retained, says when the last round
+ * was, how many addresses answered it, `broker`, the address the devices that answered reach the
+ * broker at: MQTT_HOST when it names one, else this machine's address on the network most of them
+ * are on, and `version`, the sidecar's VERSION.
  *
- * Plain Deno with no imports: MQTT 3.1.1 (CONNECT, PUBLISH at QoS 0, DISCONNECT) is written here, one
- * connection per round. Needs --allow-net, --allow-env, --allow-run=cat (the ARP table),
+ * Plain Deno with no imports: MQTT 3.1.1 (CONNECT, SUBSCRIBE, PUBLISH at QoS 0, DISCONNECT) is written
+ * here, one connection per round and one more for the first round's reading. Needs --allow-net, --allow-env, --allow-run=cat (the ARP table),
  * --allow-sys=networkInterfaces and --unstable-net (for UDP).
  */
+
+/**
+ * The version of what the sidecar offers EiN: its environment, these topics and messages, the broker's
+ * accounts and the restreamer's. Below 1.0.0 the minor is the breaking part, as in a caret range. The
+ * image is tagged with it and with its line (0.1 for 0.1.x), which an installation pulls for the range
+ * the module asks for.
+ */
+export const VERSION = '0.1.0';
 
 const env = (key: string, fallback = ''): string => Deno.env.get(key)?.trim() || fallback;
 const seconds = (key: string, fallback: number): number => {
@@ -414,10 +424,15 @@ const packet = (type: number, body: number[]): Uint8Array => {
 };
 
 const STATUS = `${PREFIX}/status`;
+/** How long the broker is given to send another retained host before all are taken to have come. */
+const QUIET_MS = 1000;
 
-/** One connection: publishes each message, retained at QoS 0, and disconnects. */
-const publishAll = async (messages: { topic: string; payload: string }[]): Promise<void> => {
-  const connection = await Deno.connect({ hostname: MQTT_HOST, port: MQTT_PORT });
+type Broker = { hostname: string; port: number };
+const BROKER: Broker = { hostname: MQTT_HOST, port: MQTT_PORT };
+
+/** A connection the broker has accepted. */
+const connect = async (broker: Broker): Promise<Deno.TcpConn> => {
+  const connection = await Deno.connect(broker);
   try {
     const flags = 0x02 | (MQTT_USER ? 0x80 : 0) | (MQTT_USER && MQTT_PASSWORD ? 0x40 : 0);
     const body = [...utf8('MQTT'), 4, flags, 0, 60, ...utf8(`ein-discovery-${crypto.randomUUID().slice(0, 8)}`)];
@@ -433,6 +448,17 @@ const publishAll = async (messages: { topic: string; payload: string }[]): Promi
     }
     if (ack[0] !== 0x20) throw new Error('the broker did not answer as MQTT');
     if (ack[3] !== 0) throw new Error(ack[3] === 4 || ack[3] === 5 ? `the broker refused ${MQTT_USER}'s password` : `the broker refused the connection (${ack[3]})`);
+    return connection;
+  } catch (error) {
+    connection.close();
+    throw error;
+  }
+};
+
+/** One connection: publishes each message, retained at QoS 0, and disconnects. */
+const publishAll = async (messages: { topic: string; payload: string }[]): Promise<void> => {
+  const connection = await connect(BROKER);
+  try {
     for (const { topic, payload } of messages) {
       await connection.write(packet(0x31, [...utf8(topic), ...new TextEncoder().encode(payload)]));
     }
@@ -442,12 +468,79 @@ const publishAll = async (messages: { topic: string; payload: string }[]): Promi
   }
 };
 
+/**
+ * When each host retained under `<prefix>/host/` was last heard, by id: what an earlier listener
+ * published. One whose `seen` does not read counts as heard long ago.
+ */
+export const retainedSeen = async (broker = BROKER, prefix = PREFIX): Promise<Map<string, number>> => {
+  const seen = new Map<string, number>();
+  const hosts = `${prefix}/host/`;
+  const connection = await connect(broker);
+  let subscribed = false;
+  let ended = false;
+  let last = Date.now();
+  const take = (header: number, body: Uint8Array) => {
+    if (header >> 4 === 9) subscribed = true;
+    if (header >> 4 !== 3) return;
+    const length = (body[0] << 8) | body[1];
+    const topic = new TextDecoder().decode(body.subarray(2, 2 + length));
+    const payload = new TextDecoder().decode(body.subarray(2 + length + ((header >> 1) & 0x03 ? 2 : 0)));
+    if (!topic.startsWith(hosts) || !payload) return;
+    let at = NaN;
+    try {
+      at = Date.parse(JSON.parse(payload).seen);
+    } catch { /* not a host */ }
+    seen.set(topic.slice(hosts.length), Number.isFinite(at) ? at : 0);
+  };
+  const reading = (async () => {
+    let buffer = new Uint8Array(0);
+    const chunk = new Uint8Array(64 * 1024);
+    for (;;) {
+      const n = await connection.read(chunk);
+      if (n === null) return;
+      last = Date.now();
+      const joined = new Uint8Array(buffer.length + n);
+      joined.set(buffer);
+      joined.set(chunk.subarray(0, n), buffer.length);
+      buffer = joined;
+      for (;;) {
+        let length = 0;
+        let index = 1;
+        let complete = false;
+        for (let multiplier = 1; index < buffer.length && index <= 4; multiplier *= 128) {
+          const byte = buffer[index++];
+          length += (byte & 0x7f) * multiplier;
+          if (!(byte & 0x80)) {
+            complete = true;
+            break;
+          }
+        }
+        if (!complete || buffer.length < index + length) break;
+        take(buffer[0], buffer.subarray(index, index + length));
+        buffer = buffer.slice(index + length);
+      }
+    }
+  })().catch(() => {/* closed below */}).finally(() => ended = true);
+  try {
+    await connection.write(packet(0x82, [0, 1, ...utf8(`${hosts}+`), 0]));
+    while (!ended && !(subscribed && Date.now() - last >= QUIET_MS)) await sleep(50);
+    if (!subscribed) throw new Error('the broker closed the connection before taking the subscription');
+    await connection.write(new Uint8Array([0xe0, 0]));
+  } finally {
+    connection.close();
+    await reading;
+  }
+  return seen;
+};
+
 // ---- the service ----
 
 const idOf = (host: Host): string => host.mac ? host.mac.replace(/:/g, '') : host.ip;
 
 /** When each id was last heard, so one unheard for FORGET_MS is cleared. */
 const lastHeard = new Map<string, number>();
+/** Whether `lastHeard` holds what the broker retained from before this listener started. */
+let remembered = false;
 
 const run = async (mdns: Deno.DatagramConn) => {
   log(`publishing to ${MQTT_HOST}:${MQTT_PORT} under ${PREFIX}, every ${INTERVAL_MS / 1000} s`);
@@ -455,6 +548,10 @@ const run = async (mdns: Deno.DatagramConn) => {
     const started = Date.now();
     try {
       const hosts = await round(mdns);
+      if (!remembered) {
+        for (const [id, at] of await retainedSeen()) if (!lastHeard.has(id)) lastHeard.set(id, at);
+        remembered = true;
+      }
       const messages = hosts.map((host) => ({ topic: `${PREFIX}/host/${idOf(host)}`, payload: JSON.stringify(host) }));
       for (const host of hosts) lastHeard.set(idOf(host), started);
       for (const [id, at] of lastHeard) {
@@ -463,7 +560,7 @@ const run = async (mdns: Deno.DatagramConn) => {
         lastHeard.delete(id);
       }
       const address = BIND !== '0.0.0.0' && BIND !== '127.0.0.1' ? BIND : ownAddress(hosts.map((host) => host.ip));
-      const status = { round: new Date(started).toISOString(), hosts: hosts.length, ...(address ? { broker: `${address}:${MQTT_PORT}` } : {}) };
+      const status = { round: new Date(started).toISOString(), hosts: hosts.length, ...(address ? { broker: `${address}:${MQTT_PORT}` } : {}), version: VERSION };
       messages.push({ topic: STATUS, payload: JSON.stringify(status) });
       await publishAll(messages);
     } catch (error) {

@@ -1,8 +1,8 @@
 /**
- * The restreamer cameras are given to: go2rtc's HTTP API, in the automation sidecar
- * (`CFG_AUTOMATION_STREAMS_URL`, as the account `ein` with `CFG_AUTOMATION_STREAMS_KEY`). It keeps
+ * The restreamer cameras are given to: go2rtc's HTTP API, in the devices sidecar
+ * (`CFG_DEVICES_STREAMS_URL`, as the account `ein` with `CFG_DEVICES_STREAMS_KEY`). It keeps
  * one connection to each source it is given and serves it again: a JPEG of it now, MSE over a
- * WebSocket to a page, and RTSP to the media service, at `CFG_AUTOMATION_STREAMS_RTSP` as the media
+ * WebSocket to a page, and RTSP to the media service, at `CFG_DEVICES_STREAMS_RTSP` as the media
  * service reaches it, as `ein` too. A source is named `<device>-<endpoint>`, and its address, with
  * the camera's password in it, never leaves the driver and the restreamer: go2rtc shows it masked.
  */
@@ -57,7 +57,7 @@ export const createRestreamer = (fetcher: Fetch, base: string, password: string,
     },
     live: (name) => ({ url: `${root.replace(/^http/, 'ws')}/api/ws?${new URLSearchParams({ src: name })}`, headers }),
     rtsp: (name) => {
-      if (!rtspBase) throw new Error('CFG_AUTOMATION_STREAMS_RTSP is not set, so no other service is told where a stream is');
+      if (!rtspBase) throw new Error('CFG_DEVICES_STREAMS_RTSP is not set, so no other service is told where a stream is');
       const url = new URL(`${rtspBase.replace(/\/+$/, '')}/${encodeURIComponent(name)}`);
       url.username = 'ein';
       url.password = encodeURIComponent(password);

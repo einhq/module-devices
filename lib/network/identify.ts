@@ -18,7 +18,9 @@ type Pattern = {
 
 const service = (host: NetworkHost, type: string): Mdns | undefined => host.mdns.find((each) => each.type === type);
 const services = (host: NetworkHost, test: (each: Mdns) => boolean): Mdns | undefined => host.mdns.find(test);
-const described = (host: NetworkHost, test: (each: Ssdp) => boolean): Ssdp | undefined => host.ssdp.find((each) => each.manufacturer !== undefined && test(each));
+/** An SSDP answer whose description was read (a TV's may name no manufacturer) that `test` takes. */
+const described = (host: NetworkHost, test: (each: Ssdp) => boolean): Ssdp | undefined =>
+  host.ssdp.find((each) => (each.manufacturer ?? each.deviceType ?? each.friendlyName) !== undefined && test(each));
 /** A host's name without `.local`. */
 const stem = (name: string): string => name.replace(/\.local\.?$/, '');
 
@@ -141,7 +143,7 @@ const PATTERNS: Pattern[] = [
       class: 'speaker',
       addable: true,
       adopt: 'cast',
-      connect: 'Added, it says what it plays, and its volume, mute, play, pause and stop can be set.',
+      connect: 'Added, it says what it plays, its volume, mute, play, pause and stop can be set, and recordings written to it are played on it.',
     },
   },
   {
@@ -170,7 +172,14 @@ const PATTERNS: Pattern[] = [
       const renderer = described(host, (each) => /MediaRenderer/.test(each.deviceType ?? ''));
       return renderer && { label: renderer.friendlyName, model: renderer.modelName };
     },
-    identity: { kind: 'media', class: 'media', addable: true },
+    identity: {
+      kind: 'media',
+      vendor: 'DLNA',
+      class: 'media',
+      addable: true,
+      adopt: 'dlna',
+      connect: 'Added, it says what it plays, its volume, mute, play, pause and stop can be set, and recordings written to it are played on it.',
+    },
   },
   {
     // NETGEAR's ReadyNAS says what it is in a record of its own, beside its file shares.
@@ -249,6 +258,36 @@ export const webPageOf = (host: NetworkHost): string | undefined => {
   if (https) return `https://${host.ip}${https.port && https.port !== 443 ? `:${https.port}` : ''}${pathOf(https)}`;
   const admin = host.mdns.map((each) => each.txt.adminurl).find((url) => url && /^https?:\/\//.test(url));
   return admin ? `${new URL(admin).protocol}//${host.ip}/` : undefined;
+};
+
+/**
+ * The id a host gives itself, the same on every interface it is on: a Cast device's `id` record,
+ * else its DLNA renderer's UDN. Undefined for a host that gives none, which is known by its hardware
+ * address or IP alone.
+ */
+export const ownIdOf = (host: NetworkHost): string | undefined => {
+  const cast = service(host, '_googlecast._tcp')?.txt.id;
+  const udn = rendererEntry(host)?.udn?.replace(/^uuid:/i, '');
+  const id = (cast ?? udn)?.toLowerCase();
+  return id && /^[0-9a-f-]{16,}$/.test(id) ? id.replace(/-/g, '') : undefined;
+};
+
+/** What the host's DLNA renderer answered SSDP with: its root device's, or one that names the renderer. */
+const rendererEntry = (host: NetworkHost): Ssdp | undefined =>
+  host.ssdp.find((each) => /:MediaRenderer:/.test(each.deviceType ?? '') && each.location) ??
+    host.ssdp.find((each) => /:MediaRenderer:/.test(each.st) && each.location);
+
+/** Where the description of the host's DLNA renderer is, at the host's address now; undefined when it has none. */
+export const rendererOf = (host: NetworkHost): string | undefined => {
+  const location = rendererEntry(host)?.location;
+  if (!location) return undefined;
+  try {
+    const url = new URL(location);
+    url.hostname = host.ip;
+    return url.href;
+  } catch {
+    return undefined;
+  }
 };
 
 /**

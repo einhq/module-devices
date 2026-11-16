@@ -48,6 +48,8 @@ export type EntityUpdate = {
   deviceClass?: string;
   category?: EndpointCategory;
   options?: string[];
+  /** A settable text of one or more lines, one thing each: what a screen is to show. */
+  lines?: true;
   min?: number;
   max?: number;
   step?: number;

@@ -1,8 +1,8 @@
-# The automation sidecar, ghcr.io/einhq/automation: the MQTT broker, the network listener and the
-# restreamer that the Automation module's devices need beside EiN, in one container that runs on the
+# The devices sidecar, ghcr.io/einhq/devices: the MQTT broker, the network listener and the
+# restreamer that the Devices module's devices need beside EiN, in one container that runs on the
 # host's network (supervisor.ts says what each is and what it reads). Built from this folder:
 #
-#   podman build -t localhost/ein-automation sidecar
+#   podman build -t localhost/ein-devices sidecar
 #
 # Mosquitto and ffmpeg come from Alpine; go2rtc is its release binary, checked against its sum.
 # ffmpeg is go2rtc's, for a JPEG frame of an H.264 or H.265 stream.
@@ -25,4 +25,4 @@ COPY supervisor.ts discovery.ts /app/
 
 # Root in the container: the broker drops to its own user, and the supervisor gives it its data.
 USER root
-ENTRYPOINT ["/tini", "--", "deno", "run", "--allow-env", "--allow-read", "--allow-write=/data,/run/automation", "--allow-run", "--allow-net=127.0.0.1", "/app/supervisor.ts"]
+ENTRYPOINT ["/tini", "--", "deno", "run", "--allow-env", "--allow-read", "--allow-write=/data,/run/devices", "--allow-run", "--allow-net=127.0.0.1", "/app/supervisor.ts"]

@@ -1,5 +1,5 @@
 /**
- * The sources the bridge can run, by name (`CFG_AUTOMATION_SOURCES`). Each is a driver of core's
+ * The sources the bridge can run, by name (`CFG_DEVICES_SOURCES`). Each is a driver of core's
  * by the same name while the bridge runs.
  */
 
@@ -10,7 +10,7 @@ import type { MqttSource } from './types.ts';
 
 export type { Command, DeviceChange, DeviceUpdate, EntityUpdate, MqttSource, Publish, Update } from './types.ts';
 
-/** Every source there is, which are the names of automation's drivers. */
+/** Every source there is, which are the names of this module's drivers. */
 export const SOURCE_NAMES: readonly string[] = ['ha-discovery', 'shelly', 'shelly-gen1'];
 
 type SourceOptions = {

@@ -1,96 +1,97 @@
 {
-  "name": "automation",
-  "version": "0.4.4",
-  "description": "MQTT drivers and rules for core's devices: sensors, buttons, plugs and lights that announce themselves over MQTT (Home Assistant discovery, Shelly) become devices under /dev, devices found on the network and web APIs can be added, and automations, nodes wired into a graph, act on them when a reading, a press, a file coming into a folder or the clock says so",
+  "name": "devices",
+  "version": "0.5.0",
+  "description": "Drivers for core's devices: sensors, buttons, plugs and lights that announce themselves over MQTT (Home Assistant discovery, Shelly), printers, NAS boxes, speakers and screens asked over the network, web APIs, and cameras over RTSP and ONVIF become devices under /dev; what is on the network is found and can be added, a photo, a video or a page written to a screen is shown on it, and a camera is watched live",
   "license": "MIT",
-  "coreApi": "^0.15.4",
+  "coreApi": "^0.15.16",
+  "dependencies": {
+    "ems": "^0.14.8"
+  },
+  "services": {
+    "devices": "^0.1.0"
+  },
   "exports": {
     "./api": "./lib/api.ts"
   },
   "imports": {
-    "@automation/automation-commands": "./lib/automation-commands.ts",
-    "@automation/automation-files": "./lib/automation-files.ts",
-    "@automation/automation-service": "./lib/automation-service.ts",
-    "@automation/automations/examples": "./lib/automations/examples.ts",
-    "@automation/bridge": "./lib/bridge.ts",
-    "@automation/cameras": "./lib/cameras/restreamer.ts",
-    "@automation/drivers": "./lib/drivers.ts",
-    "@automation/groups": "./lib/groups.ts",
-    "@automation/mqtt": "./lib/mqtt.ts",
-    "@automation/network": "./lib/network/mod.ts",
-    "@automation/paths": "./lib/paths.ts",
-    "@automation/sources": "./lib/sources/mod.ts",
-    "@automation/state": "./lib/state.ts",
+    "@devices/bridge": "./lib/bridge.ts",
+    "@devices/cameras": "./lib/cameras/restreamer.ts",
+    "@devices/drivers": "./lib/drivers.ts",
+    "@devices/mqtt": "./lib/mqtt.ts",
+    "@devices/network": "./lib/network/mod.ts",
+    "@devices/sidecar": "./lib/sidecar.ts",
+    "@devices/sources": "./lib/sources/mod.ts",
+    "@devices/state": "./lib/state.ts",
     "@std/assert": "jsr:@std/assert@^1.0.16",
-    "@std/yaml": "jsr:@std/yaml@^1.0.11",
+    "@std/semver": "jsr:@std/semver@^1.0.5",
     "mqtt5": "jsr:@ymjacky/mqtt5@^0.0.26"
   },
   "config": {
     "options": [
       {
-        "key": "CFG_AUTOMATION_MQTT_URL",
+        "key": "CFG_DEVICES_MQTT_URL",
         "scope": "system",
         "type": "string",
         "default": "",
         "label": "MQTT broker",
-        "description": "The broker devices talk to, as mqtt://host:1883 or mqtts://host:8883. setup.sh --automation runs one beside EiN, in the automation sidecar, and sets this.",
-        "group": "Automation",
+        "description": "The broker devices talk to, as mqtt://host:1883 or mqtts://host:8883. setup.sh --devices runs one beside EiN, in the devices sidecar, and sets this.",
+        "group": "Devices",
         "emptyMeans": "no device is heard on a broker; those EiN asks over the network are still read",
         "restarts": [
-          "automation-bridge"
+          "devices-bridge"
         ]
       },
       {
-        "key": "CFG_AUTOMATION_MQTT_USER",
+        "key": "CFG_DEVICES_MQTT_USER",
         "scope": "system",
         "type": "string",
         "default": "",
         "label": "MQTT user",
         "description": "The account EiN signs in to the broker with.",
-        "group": "Automation",
+        "group": "Devices",
         "emptyMeans": "EiN signs in without an account",
         "restarts": [
-          "automation-bridge"
+          "devices-bridge"
         ]
       },
       {
-        "key": "CFG_AUTOMATION_MQTT_KEY",
+        "key": "CFG_DEVICES_MQTT_KEY",
         "scope": "system",
         "type": "secret",
         "default": "",
         "label": "MQTT password",
         "description": "The password of the MQTT user, sent only to the broker above. No shell sees it, and nothing shows it once it is set.",
-        "group": "Automation",
+        "group": "Devices",
         "restarts": [
-          "automation-bridge"
+          "devices-bridge"
         ]
       },
       {
-        "key": "CFG_AUTOMATION_SOURCES",
+        "key": "CFG_DEVICES_SOURCES",
         "scope": "system",
         "type": "string",
         "default": "ha-discovery shelly shelly-gen1",
         "label": "Device sources",
         "description": "Which kinds of device the bridge listens for, and drives, separated by spaces: ha-discovery (anything that announces itself the way Home Assistant reads, such as ESPHome), shelly (Shelly's second generation and later) and shelly-gen1 (Shelly's first generation: Plug S, 1, 1PM, 2.5, i3).",
-        "group": "Automation",
+        "group": "Devices",
         "restarts": [
-          "automation-bridge"
+          "devices-bridge"
         ]
       },
       {
-        "key": "CFG_AUTOMATION_DISCOVERY_PREFIX",
+        "key": "CFG_DEVICES_DISCOVERY_PREFIX",
         "scope": "system",
         "type": "string",
         "default": "homeassistant",
         "label": "Discovery prefix",
         "description": "The topic devices announce themselves under, for ha-discovery.",
-        "group": "Automation",
+        "group": "Devices",
         "restarts": [
-          "automation-bridge"
+          "devices-bridge"
         ]
       },
       {
-        "key": "CFG_AUTOMATION_HISTORY",
+        "key": "CFG_DEVICES_HISTORY",
         "scope": "system",
         "type": "select",
         "choices": [
@@ -102,126 +103,121 @@
         "default": "365 day",
         "label": "Reading history",
         "description": "How long an endpoint's values are kept. Applies to endpoints found from now on; one found before keeps its own (change it with attrs on the endpoint).",
-        "group": "Automation",
+        "group": "Devices",
         "restarts": [
-          "automation-bridge"
+          "devices-bridge"
         ]
       },
       {
-        "key": "CFG_AUTOMATION_MIN_INTERVAL",
+        "key": "CFG_DEVICES_MIN_INTERVAL",
         "scope": "system",
         "type": "number",
         "default": "10",
         "label": "Seconds between readings",
         "description": "The shortest time between two numbers of one endpoint that are kept and published: a number that comes sooner waits, and only the newest of those is kept. On and off, words and presses are kept as they come. Given to endpoints found from now on, as their minInterval attr, which may be changed on each.",
-        "group": "Automation",
+        "group": "Devices",
         "restarts": [
-          "automation-bridge"
+          "devices-bridge"
         ]
       },
       {
-        "key": "CFG_AUTOMATION_DEVICE_BROKER",
+        "key": "CFG_DEVICES_DEVICE_BROKER",
         "scope": "system",
         "type": "string",
         "default": "",
         "label": "Broker for devices",
-        "description": "The broker's address as the devices on the network reach it, host:port, which a device added from the network is given. setup.sh --automation runs a listener beside the broker that says it.",
-        "group": "Automation",
+        "description": "The broker's address as the devices on the network reach it, host:port, which a device added from the network is given. setup.sh --devices runs a listener beside the broker that says it.",
+        "group": "Devices",
         "emptyMeans": "the address the network listener says"
       },
       {
-        "key": "CFG_AUTOMATION_DEVICE_USER",
+        "key": "CFG_DEVICES_DEVICE_USER",
         "scope": "system",
         "type": "string",
         "default": "",
         "label": "Device MQTT user",
-        "description": "The account a device added from the network signs in to the broker with. setup.sh --automation sets it to device.",
-        "group": "Automation",
+        "description": "The account a device added from the network signs in to the broker with. setup.sh --devices sets it to device.",
+        "group": "Devices",
         "emptyMeans": "devices sign in without an account"
       },
       {
-        "key": "CFG_AUTOMATION_DEVICE_KEY",
+        "key": "CFG_DEVICES_DEVICE_KEY",
         "scope": "system",
         "type": "secret",
         "default": "",
         "label": "Device MQTT password",
         "description": "The password of the device user, given only to a device added from the network.",
-        "group": "Automation"
+        "group": "Devices"
       },
       {
-        "key": "CFG_AUTOMATION_STREAMS_URL",
+        "key": "CFG_DEVICES_STREAMS_URL",
         "scope": "system",
         "type": "string",
         "default": "",
         "label": "Restreamer",
-        "description": "The restreamer cameras are given to and their streams read from, go2rtc's API as http://host:1984. setup.sh --automation runs one beside EiN, in the automation sidecar, and sets this.",
-        "group": "Automation",
+        "description": "The restreamer cameras are given to and their streams read from, go2rtc's API as http://host:1984. setup.sh --devices runs one beside EiN, in the devices sidecar, and sets this.",
+        "group": "Devices",
         "emptyMeans": "a camera has no live view, and its picture is asked of the camera itself",
         "restarts": [
-          "automation-bridge"
+          "devices-bridge"
         ]
       },
       {
-        "key": "CFG_AUTOMATION_STREAMS_RTSP",
+        "key": "CFG_DEVICES_STREAMS_RTSP",
         "scope": "system",
         "type": "string",
         "default": "",
         "label": "Restreamer for the media service",
-        "description": "The restreamer's RTSP as the media service reaches it, rtsp://host:8554, where it reads a camera's stream to watch it for faces. setup.sh --automation sets it.",
-        "group": "Automation",
+        "description": "The restreamer's RTSP as the media service reaches it, rtsp://host:8554, where it reads a camera's stream to watch it for faces. setup.sh --devices sets it.",
+        "group": "Devices",
         "emptyMeans": "no other service is told where a camera's stream is, so none is watched for faces",
         "restarts": [
-          "automation-bridge"
+          "devices-bridge"
         ]
       },
       {
-        "key": "CFG_AUTOMATION_STREAMS_KEY",
+        "key": "CFG_DEVICES_STREAMS_KEY",
         "scope": "system",
         "type": "secret",
         "default": "",
         "label": "Restreamer password",
         "description": "The password of the restreamer's account ein, sent only to the restreamer above.",
-        "group": "Automation",
+        "group": "Devices",
         "restarts": [
-          "automation-bridge"
+          "devices-bridge"
         ]
       },
       {
-        "key": "CFG_AUTOMATION_SNMP_COMMUNITY",
+        "key": "CFG_DEVICES_MEDIA_URL",
+        "scope": "system",
+        "type": "string",
+        "default": "",
+        "label": "EiN's address for speakers and screens",
+        "description": "EiN's web address as the speakers and screens on the network reach it, http://host:port, which a Cast device fetches what is written to it from. It must be plain HTTP on the network they are on.",
+        "group": "Devices",
+        "emptyMeans": "this machine's address the network listener says, on EiN's port (CFG_HTTP_PORT)"
+      },
+      {
+        "key": "CFG_DEVICES_SNMP_COMMUNITY",
         "scope": "system",
         "type": "string",
         "default": "public",
         "label": "SNMP community",
         "description": "The read-only community EiN asks a device found on the network with when it adds it, and its snmp driver goes on asking it with: public unless the device was set to another.",
-        "group": "Automation"
-      },
-      {
-        "key": "CFG_USER_AUTOMATION_NODE_DOCS",
-        "scope": "user",
-        "type": "boolean",
-        "default": "true",
-        "label": "Node docs in the editor",
-        "description": "Whether the panel of a node in the automation editor shows, at its foot, what the node does and what each of its settings means. Folding or opening them there sets this.",
-        "group": "Automation"
+        "group": "Devices"
       }
     ]
   },
   "ui": {
     "routes": {
-      "/automations": "ui/pages/automations.tsx",
       "/settings/mqtt": "ui/pages/settings-mqtt.tsx",
       "/settings/restreamer": "ui/pages/settings-restreamer.tsx",
       "/camera-live": "ui/pages/camera-live.tsx",
-      "/cards/automation/camera": "ui/cards/camera.tsx",
-      "/cards/automation/button": "ui/cards/button.tsx",
-      "/automations/:name": "ui/pages/automations.tsx",
+      "/cards/devices/camera": "ui/cards/camera.tsx",
+      "/cards/devices/button": "ui/cards/button.tsx",
       "/found-devices": "ui/pages/found-devices.tsx",
       "/found-devices-button": "ui/pages/found-devices-button.tsx",
       "/found-devices/:id": "ui/pages/found-device.tsx"
-    },
-    "open": {
-      "/etc/automations/": "/automations/{rest}",
-      "/etc/automations.d/": "/automations/{rest}"
     }
   }
 }

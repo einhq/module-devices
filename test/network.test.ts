@@ -5,10 +5,11 @@
  */
 
 import { assertEquals, assertRejects, assertThrows } from '@std/assert';
+import { ADMIN_ACCESS } from '@ein/client';
 import type { NetworkHost } from '../lib/api.ts';
 import { adoptShelly, type Fetch } from '../lib/network/adopt.ts';
 import { foundDevices, NetworkHosts } from '../lib/network/found.ts';
-import { identify, webPageOf } from '../lib/network/identify.ts';
+import { identify, ownIdOf, rendererOf, webPageOf } from '../lib/network/identify.ts';
 import { parseIppResponse, printerAttributesRequest } from '../lib/network/ipp.ts';
 import { decodeCastMessage, encodeCastMessage } from '../lib/network/cast.ts';
 import { changesOf, createPolledDrivers, reach } from '../lib/network/polled.ts';
@@ -92,6 +93,35 @@ Deno.test('identify', async (t) => {
     const speaker = host('192.168.1.26', { mdns: [{ type: '_googlecast._tcp', instance: 'Google-Home-Mini-1', txt: { fn: 'Kitchen speaker', md: 'Google Home Mini' } }] });
     assertEquals([identify(speaker).kind, identify(speaker).label, identify(speaker).adopt, identify(speaker).class], ['cast', 'Kitchen speaker', 'cast', 'speaker']);
   });
+  await t.step('a DLNA renderer is added over UPnP AV, known by its UDN, its description at its address now', () => {
+    const tv = host('192.168.1.50', {
+      ssdp: [
+        {
+          st: 'upnp:rootdevice',
+          location: 'http://192.168.1.49:2870/dmr.xml',
+          friendlyName: 'PHILIPS TV',
+          deviceType: 'urn:schemas-upnp-org:device:MediaRenderer:3',
+          udn: 'uuid:0d1e2a3b-4c5d-1e6f-8a7b-020000000050',
+        },
+      ],
+    });
+    assertEquals([identify(tv).kind, identify(tv).label, identify(tv).adopt, identify(tv).class], ['media', 'PHILIPS TV', 'dlna', 'media']);
+    assertEquals(ownIdOf(tv), '0d1e2a3b4c5d1e6f8a7b020000000050');
+    assertEquals(rendererOf(tv), 'http://192.168.1.50:2870/dmr.xml');
+  });
+  await t.step('a TV with Cast and a DLNA renderer is one Cast host, which knows its renderer', () => {
+    const tv = host('192.168.1.135', {
+      mdns: [{ type: '_googlecast._tcp', instance: 'Android-TV-1', txt: { id: '0f1e2d3c4b5a69788796a5b4c3d2e1f0', fn: 'Living room TV' } }],
+      ssdp: [{
+        st: 'urn:schemas-upnp-org:device:MediaRenderer:1',
+        usn: 'uuid:aaaa-bbbb::urn:schemas-upnp-org:device:MediaRenderer:1',
+        location: 'http://192.168.1.135:49152/description.xml',
+      }],
+    });
+    assertEquals([identify(tv).kind, identify(tv).label, identify(tv).adopt], ['cast', 'Living room TV', 'cast']);
+    assertEquals(ownIdOf(tv), '0f1e2d3c4b5a69788796a5b4c3d2e1f0');
+    assertEquals(rendererOf(tv), 'http://192.168.1.135:49152/description.xml');
+  });
   await t.step('an ONVIF camera is added over ONVIF, named by its scopes, though it offers a web page too', () => {
     const camera = host('192.168.1.27', {
       mdns: [{ type: '_http._tcp', instance: 'IPC', port: 80, txt: {} }],
@@ -137,6 +167,8 @@ Deno.test('the network listener on the broker', async (t) => {
     network.hear('ein/discovery/status', JSON.stringify({ round: SEEN, hosts: 3, broker: '192.168.1.2:1883' }));
     assertEquals([...network.hosts.keys()], ['a8032ab12345', '192.168.1.22', '192.168.1.23']);
     assertEquals(network.status, { round: SEEN, broker: '192.168.1.2:1883' });
+    network.hear('ein/discovery/status', JSON.stringify({ round: SEEN, hosts: 3, broker: '192.168.1.2:1883', version: '0.1.0' }));
+    assertEquals(network.status, { round: SEEN, broker: '192.168.1.2:1883', version: '0.1.0' });
   });
 
   await t.step('lets a host go on an empty message, and leaves the others’ topics alone', () => {
@@ -151,6 +183,32 @@ Deno.test('the network listener on the broker', async (t) => {
     assertEquals(found.devices.map((each) => [each.id, each.device]), [['192.168.1.22', undefined], ['a8032ab12345', 'shellyplus1pm-a8032ab12345']]);
     const byMac = foundDevices(network, [{ name: 'plus', mac: 'A8-03-2A-B1-23-45' }], new Set(['192.168.1.22']));
     assertEquals(byMac.devices.map((each) => [each.id, each.device, each.ignored]), [['192.168.1.22', undefined, true], ['a8032ab12345', 'plus', false]]);
+  });
+
+  const tv = (ip: string, mac: string | undefined, seen: string) =>
+    host(ip, {
+      ...(mac ? { mac } : {}),
+      seen,
+      mdns: [{ type: '_googlecast._tcp', instance: 'TV-0A1B2C', port: 8009, txt: { id: '0A1B2C3D4E5F60718293A4B5C6D7E8F9', fn: 'Living room TV', md: 'TV 55' } }],
+    });
+
+  await t.step('a Cast device heard on two interfaces is one host under its own id, at the address that announced it last', () => {
+    say('020000000001', tv('192.168.1.30', '02:00:00:00:00:01', '2026-11-09T07:00:00.000Z'));
+    say('192.168.1.31', tv('192.168.1.31', undefined, SEEN));
+    say('020000000002', tv('192.168.1.31', '02:00:00:00:00:02', SEEN));
+    const own = '0a1b2c3d4e5f60718293a4b5c6d7e8f9';
+    assertEquals([...network.hosts.keys()], ['a8032ab12345', '192.168.1.22', own]);
+    assertEquals([network.host(own)?.ip, network.host('020000000001')?.ip, network.idOf('020000000001')], ['192.168.1.31', '192.168.1.31', own]);
+    const found = foundDevices(network, [{ name: 'tv', mac: '02:00:00:00:00:01', found: '020000000001' }], new Set());
+    assertEquals(found.devices.filter((each) => each.kind === 'cast').map((each) => [each.id, each.ip, each.device]), [[own, '192.168.1.31', 'tv']]);
+    const byMac = foundDevices(network, [{ name: 'tv', mac: '02:00:00:00:00:01' }], new Set());
+    assertEquals(byMac.devices.find((each) => each.kind === 'cast')?.device, 'tv', 'by the hardware address of an interface it was heard on');
+  });
+
+  await t.step('the interface heard last is let go, and the other is where it is', () => {
+    say('020000000002', '');
+    say('192.168.1.31', '');
+    assertEquals(network.host('0a1b2c3d4e5f60718293a4b5c6d7e8f9')?.ip, '192.168.1.30');
   });
 });
 
@@ -421,10 +479,10 @@ Deno.test('the http driver reads what is named in an answer', async (t) => {
       'action',
       true,
     ]]);
-    await http.write!(device, 'power', false);
-    await http.write!(device, 'restart', null);
+    await http.write!(device, 'power', false, ADMIN_ACCESS);
+    await http.write!(device, 'restart', null, ADMIN_ACCESS);
     assertEquals(asked.slice(1), ['http://192.0.2.32/cm?cmnd=Power%20OFF', 'http://192.0.2.32/cm?cmnd=Restart%201']);
-    await assertRejects(() => http.write!(device, 'watts', 1), Error, 'watts cannot be set');
+    await assertRejects(() => http.write!(device, 'watts', 1, ADMIN_ACCESS), Error, 'watts cannot be set');
   });
 });
 

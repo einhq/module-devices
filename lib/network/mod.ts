@@ -14,10 +14,11 @@ import { NETWORK_IGNORED } from '../paths.ts';
 import { bridgeState } from '../state.ts';
 import type { Fetch } from './adopt.ts';
 import { foundDevices, type KnownDevice } from './found.ts';
-import { webPageOf } from './identify.ts';
+import { rendererOf, webPageOf } from './identify.ts';
 
 export { adoptShelly } from './adopt.ts';
 export { answersSnmp, createPolledDrivers, DEFAULT_COMMUNITY, POLLED_DRIVERS } from './polled.ts';
+export { mediaAddress, type VideoStreamRequest } from './play.ts';
 export { snmpWalk } from './snmp.ts';
 
 /**
@@ -75,11 +76,12 @@ export const readFound = async (cmd: Command): Promise<FoundAnswer | undefined> 
   return foundDevices(network, devices, ignored);
 };
 
-/** One host the running bridge heard, by its id or address, with all it said; undefined when none is. */
+/** One host the running bridge heard, by its id, one the listener gave it, or its address, with all it said; undefined when none is. */
 export const readFoundDetail = async (cmd: Command, id: string): Promise<FoundDetail | undefined> => {
   const network = bridgeState()?.network;
   const found = await readFound(cmd);
-  const device = found?.devices.find((each) => each.id === id || each.ip === id);
+  const own = network?.idOf(id) ?? id;
+  const device = found?.devices.find((each) => each.id === own || each.ip === id);
   const host = device && network?.hosts.get(device.id);
   return device && host ? { ...device, host } : undefined;
 };
@@ -132,10 +134,11 @@ export const addOnvifCamera = async (cmd: Command, found: FoundDetail, user: str
 };
 
 /**
- * Makes `found` a device of a polled driver (`network`, `ipp`, `snmp`, `cast`) under /dev, named
- * after its label, as the administrator, since /dev is theirs. It keeps the host's id, so it follows
- * the host to a new address, and what its driver asks with: a printer's IPP port and resource, the
- * SNMP community. Answers the device's name.
+ * Makes `found` a device of a polled driver (`network`, `ipp`, `snmp`, `cast`, `dlna`) under /dev,
+ * named after its label, as the administrator, since /dev is theirs. It keeps the host's id, so it
+ * follows the host to a new address, and what its driver asks with: a printer's IPP port and
+ * resource, the SNMP community, its DLNA renderer's description (a Cast TV's too, which is played on
+ * over it when Cast does not answer). Answers the device's name.
  */
 export const addPolledDevice = async (cmd: Command, found: FoundDetail, driver: string, community?: string): Promise<string> => {
   const manager = cmd.sys.devices;
@@ -148,6 +151,7 @@ export const addPolledDevice = async (cmd: Command, found: FoundDetail, driver: 
     ...(driver === 'ipp' && ipp?.port ? { port: String(ipp.port) } : {}),
     ...(driver === 'ipp' && ipp?.txt.rp ? { path: ipp.txt.rp } : {}),
     ...(driver === 'snmp' && community ? { community } : {}),
+    ...((driver === 'cast' || driver === 'dlna') && rendererOf(found.host) ? { renderer: rendererOf(found.host)! } : {}),
   };
   const attrs: DeviceAttrs = {
     label: found.label,

@@ -31,7 +31,7 @@ const SNAPSHOT_TIMEOUT_MS = 10_000;
 export type CameraOptions = {
   cmd: Command;
   devices: ModuleDevices;
-  /** Unset when no restreamer is set (`CFG_AUTOMATION_STREAMS_URL`). */
+  /** Unset when no restreamer is set (`CFG_DEVICES_STREAMS_URL`). */
   restreamer?: Restreamer;
   fetcher: Fetch;
   /** What the network listener heard, by which a camera found there is followed to a new address. */
@@ -152,7 +152,7 @@ export const startCameraDriver = (options: CameraOptions, kind: CameraKind): () 
       }
     }
     const snapshot = await kind.snapshot(device, attrs);
-    if (!snapshot) throw new Error(`${device} has no still picture to give without a restreamer (CFG_AUTOMATION_STREAMS_URL)`);
+    if (!snapshot) throw new Error(`${device} has no still picture to give without a restreamer (CFG_DEVICES_STREAMS_URL)`);
     const response = await fetcher(snapshot.url, {
       headers: snapshot.user || snapshot.password ? { authorization: `Basic ${btoa(`${snapshot.user ?? ''}:${snapshot.password ?? ''}`)}` } : {},
       signal: AbortSignal.timeout(SNAPSHOT_TIMEOUT_MS),
@@ -185,9 +185,17 @@ export const startCameraDriver = (options: CameraOptions, kind: CameraKind): () 
     }
   };
 
+  /** Where a page watches a stream live: the restreamer's socket; without one nothing is, so the driver gives no live view. */
+  const live: Driver['live'] = restreamer
+    ? async ({ device, endpoint, attrs }) => {
+      await restate(device, attrs, endpoint);
+      return restreamer.live(sourceName(device, endpoint));
+    }
+    : undefined;
+
   const unregister = devices.registerDriver(kind.name, {
     description: kind.description,
-    module: 'automation',
+    module: 'devices',
     config: kind.config,
     setup: async (device) => {
       const attrs = await attrsOf(device);
@@ -211,15 +219,11 @@ export const startCameraDriver = (options: CameraOptions, kind: CameraKind): () 
     ...(kind.write ? { write: kind.write } : {}),
     frame: async ({ device, endpoint, attrs }) => ({ bytes: await frameOf(device, attrs, endpoint), type: 'image/jpeg' }),
     source: async ({ device, endpoint, attrs }) => {
-      if (!restreamer) throw new Error('no restreamer is set (CFG_AUTOMATION_STREAMS_URL), so no other service reads a stream');
+      if (!restreamer) throw new Error('no restreamer is set (CFG_DEVICES_STREAMS_URL), so no other service reads a stream');
       await restate(device, attrs, endpoint);
       return restreamer.rtsp(sourceName(device, endpoint));
     },
-    live: async ({ device, endpoint, attrs }) => {
-      if (!restreamer) throw new Error('no restreamer is set (CFG_AUTOMATION_STREAMS_URL), so nothing is watched live');
-      await restate(device, attrs, endpoint);
-      return restreamer.live(sourceName(device, endpoint));
-    },
+    ...(live ? { live } : {}),
   });
 
   const timer = setInterval(() => tick().catch(() => {}), CHECK_EVERY_MS);

@@ -1,7 +1,8 @@
 /**
  * Messages as real devices send them, with invented names and addresses: an ESPHome sensor in the
  * hall announcing itself with Home Assistant's abbreviated keys, a Shelly plug and a Shelly
- * four-button input by the porch.
+ * four-button input by the porch; and devices answering as they do: a printer's IPP, an SNMP agent,
+ * a TV's DLNA renderer.
  */
 
 import dgram from 'node:dgram';
@@ -293,4 +294,92 @@ export const startSnmpAgent = (objects: AgentObject[]): { ready: Promise<number>
   });
   const ready = new Promise<number>((resolve) => socket.bind(0, '127.0.0.1', () => resolve(socket.address().port)));
   return { ready, close: () => socket.close() };
+};
+
+/** A DLNA renderer's description, as the 2014 Philips TV of ein/core#1328 gave it: the renderer inside a root device. */
+export const RENDERER_DESCRIPTION = `<?xml version="1.0"?><root xmlns="urn:schemas-upnp-org:device-1-0">
+<device><deviceType>urn:schemas-upnp-org:device:Basic:1</deviceType><friendlyName>TV</friendlyName>
+<deviceList><device>
+<deviceType>urn:schemas-upnp-org:device:MediaRenderer:3</deviceType><friendlyName>PHILIPS TV</friendlyName>
+<UDN>uuid:0d1e2a3b-4c5d-1e6f-8a7b-020000000050</UDN>
+<serviceList>
+<service><serviceType>urn:schemas-upnp-org:service:RenderingControl:3</serviceType><controlURL>control/RenderingControl</controlURL></service>
+<service><serviceType>urn:schemas-upnp-org:service:ConnectionManager:3</serviceType><controlURL>control/ConnectionManager</controlURL></service>
+<service><serviceType>urn:schemas-upnp-org:service:AVTransport:3</serviceType><controlURL>/control/AVTransport</controlURL></service>
+</serviceList></device></deviceList></device></root>`;
+
+/** What it plays, from its `GetProtocolInfo`, shortened. */
+export const RENDERER_SINK = 'http-get:*:image/jpeg:DLNA.ORG_PN=JPEG_LRG,http-get:*:audio/L16;rate=44100;channels=2:DLNA.ORG_PN=LPCM,' +
+  'http-get:*:audio/mpeg:DLNA.ORG_PN=MP3,http-get:*:audio/mp4:DLNA.ORG_PN=AAC_ISO,http-get:*:video/mp4:DLNA.ORG_PN=AVC_MP4_HP_HD_AAC';
+
+const envelope = (inner: string) => `<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body>${inner}</s:Body></s:Envelope>`;
+const escape = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+/**
+ * A DLNA renderer on this machine's loopback, at `hostname`, that answers as that TV did: its
+ * description at `/dmr.xml`, its transport held through the first `SetAVTransportURI` after a stop
+ * (UPnP 705), the title only with the whole medium (`GetMediaInfo`). Answers what it was asked, and
+ * its state.
+ */
+export const startRenderer = (hostname = '127.0.0.1') => {
+  const asked: { action: string; soapaction: string; body: string }[] = [];
+  const state = { uri: '', metadata: '', transport: 'NO_MEDIA_PRESENT', volume: 12, locked: 1 };
+  const server = Deno.serve({ hostname, port: 0, onListen: () => {} }, async (req) => {
+    const url = new URL(req.url);
+    if (req.method === 'GET' && url.pathname === '/dmr.xml') return new Response(RENDERER_DESCRIPTION, { headers: { 'content-type': 'text/xml' } });
+    const body = await req.text();
+    const action = body.match(/<u:(\w+) /)?.[1] ?? '';
+    asked.push({ action, soapaction: req.headers.get('soapaction') ?? '', body });
+    const field = (name: string) => body.match(new RegExp(`<${name}>([\\s\\S]*?)</${name}>`))?.[1] ?? '';
+    const answer = (inner = '') => new Response(envelope(`<u:${action}Response xmlns:u="urn:x">${inner}</u:${action}Response>`));
+    switch (action) {
+      case 'Stop':
+        state.transport = 'STOPPED';
+        return answer();
+      case 'SetAVTransportURI':
+        if (state.locked-- > 0) {
+          return new Response(
+            envelope('<s:Fault><detail><UPnPError><errorCode>705</errorCode><errorDescription>Transport is locked</errorDescription></UPnPError></detail></s:Fault>'),
+            {
+              status: 500,
+            },
+          );
+        }
+        state.uri = field('CurrentURI').replace(/&amp;/g, '&');
+        state.metadata = field('CurrentURIMetaData');
+        return answer();
+      case 'Play':
+        state.transport = 'PLAYING';
+        return answer();
+      case 'GetTransportInfo':
+        return answer(`<CurrentTransportState>${state.transport}</CurrentTransportState><CurrentTransportStatus>OK</CurrentTransportStatus>`);
+      case 'GetPositionInfo':
+        return answer(
+          `<TrackDuration>0:03:20</TrackDuration><TrackMetaData>NOT_IMPLEMENTED</TrackMetaData><TrackURI>${escape(state.uri)}</TrackURI><RelTime>0:01:02.500</RelTime>`,
+        );
+      case 'GetMediaInfo':
+        return answer(`<NrTracks>1</NrTracks><CurrentURI>${escape(state.uri)}</CurrentURI><CurrentURIMetaData>${state.metadata}</CurrentURIMetaData>`);
+      case 'GetVolume':
+        return answer(`<CurrentVolume>${state.volume}</CurrentVolume>`);
+      case 'SetVolume':
+        state.volume = Number(field('DesiredVolume'));
+        return answer();
+      case 'GetMute':
+        return answer('<CurrentMute>0</CurrentMute>');
+      case 'GetProtocolInfo':
+        // The TV refuses an InstanceID here, which ConnectionManager's actions do not take.
+        if (body.includes('<InstanceID>')) {
+          return new Response(
+            envelope('<s:Fault><detail><UPnPError><errorCode>402</errorCode><errorDescription>Invalid Args</errorDescription></UPnPError></detail></s:Fault>'),
+            {
+              status: 500,
+            },
+          );
+        }
+        return answer(`<Source></Source><Sink>${RENDERER_SINK}</Sink>`);
+      default:
+        return new Response(envelope('<s:Fault><detail><UPnPError><errorCode>401</errorCode></UPnPError></detail></s:Fault>'), { status: 500 });
+    }
+  });
+  return { asked, state, location: `http://${hostname}:${server.addr.port}/dmr.xml`, stop: () => server.shutdown() };
 };

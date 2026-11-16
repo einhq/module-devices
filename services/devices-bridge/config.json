@@ -2,6 +2,6 @@
   "description": "Hears devices on the MQTT broker and drives them as devices under /dev, and asks those EiN reads over the network",
   "restartPolicy": "on-failure",
   "workClass": "background",
-  "statusCommand": "automation-status --brief",
-  "checkCommand": "automation-status --checks"
+  "statusCommand": "devices-status --brief",
+  "checkCommand": "devices-status --checks"
 }

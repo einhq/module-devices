@@ -58,7 +58,7 @@ function Quiet({ icon, children }: { icon: string; children: ReactNode }) {
 }
 
 /**
- * `/cards/automation/button`: one large button for a device's control (`device`, `endpoint`), lit
+ * `/cards/devices/button`: one large button for a device's control (`device`, `endpoint`), lit
  * while the control is what it sets. A momentary control is pressed; on and off is switched to the
  * other, or to `value` when one is given; any other control is set to `value`, as for a scene or a
  * mode. With `confirm` the first press only asks for a second. A button whose control its viewer may
@@ -136,7 +136,7 @@ export default function ButtonCard() {
       disabled={disabled}
       aria-pressed={action.kind === 'press' ? undefined : lit}
       title={endpoint.writable ? undefined : 'You may not use this button'}
-      className='automation-button-card'
+      className='devices-button-card'
       data-lit={lit || undefined}
       data-armed={armedAt !== undefined || undefined}
       data-pending={pending || busy || undefined}
@@ -159,14 +159,14 @@ export default function ButtonCard() {
       <Text inherit fw={650} lineClamp={2}>{label}</Text>
       <Text inherit size='0.7em' c={lit || armedAt !== undefined ? undefined : 'dimmed'} style={{ opacity: 0.85 }}>{state}</Text>
       <style>
-        {`.automation-button-card { color: var(--mantine-color-text); background: var(--mantine-color-default-hover); transition: background 160ms, color 160ms, transform 80ms; }
-.automation-button-card:not(:disabled):active { transform: scale(0.97); }
-.automation-button-card[data-lit] { background: var(--mantine-primary-color-filled); color: var(--mantine-primary-color-contrast); }
-.automation-button-card[data-armed] { background: var(--mantine-color-orange-filled); color: white; }
-.automation-button-card[data-pending] { animation: automation-button-pending 1.2s ease-in-out infinite alternate; }
-.automation-button-card:disabled:not([data-pending]) { opacity: 0.75; }
-@keyframes automation-button-pending { to { opacity: 0.6; } }
-@media (prefers-reduced-motion: reduce) { .automation-button-card { animation: none !important; transition: none; } }`}
+        {`.devices-button-card { color: var(--mantine-color-text); background: var(--mantine-color-default-hover); transition: background 160ms, color 160ms, transform 80ms; }
+.devices-button-card:not(:disabled):active { transform: scale(0.97); }
+.devices-button-card[data-lit] { background: var(--mantine-primary-color-filled); color: var(--mantine-primary-color-contrast); }
+.devices-button-card[data-armed] { background: var(--mantine-color-orange-filled); color: white; }
+.devices-button-card[data-pending] { animation: devices-button-pending 1.2s ease-in-out infinite alternate; }
+.devices-button-card:disabled:not([data-pending]) { opacity: 0.75; }
+@keyframes devices-button-pending { to { opacity: 0.6; } }
+@media (prefers-reduced-motion: reduce) { .devices-button-card { animation: none !important; transition: none; } }`}
       </style>
     </UnstyledButton>
   );

@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { ConfigWriteAnswer } from '@ein/api';
 import { SaveBar, settingOf, SettingSource, TablerIcon, useViewSave } from '@ein/ui/components';
 import { useCommand, useConfig } from '@ein/ui/hooks';
-import type { RestreamerStatus } from '@automation/api';
+import type { RestreamerStatus } from '@devices/api';
 
 type Draft = { url: string; rtsp: string; password: string };
 
@@ -43,20 +43,20 @@ function Answer({ status }: { status: RestreamerStatus }) {
 }
 
 /**
- * The restreamer, a settings view of automation's (`automation.restreamer`, a `settings.views`
+ * The restreamer, a settings view of devices' (`devices.restreamer`, a `settings.views`
  * panel): go2rtc's API, which cameras are given to and their live views and pictures come from
- * (`CFG_AUTOMATION_STREAMS_URL`), its RTSP as the media service reaches it
- * (`CFG_AUTOMATION_STREAMS_RTSP`) and the password of its account `ein`
- * (`CFG_AUTOMATION_STREAMS_KEY`), saved as one so the bridge restarts once; then whether it
- * answers that account (`automation-status --streams`).
+ * (`CFG_DEVICES_STREAMS_URL`), its RTSP as the media service reaches it
+ * (`CFG_DEVICES_STREAMS_RTSP`) and the password of its account `ein`
+ * (`CFG_DEVICES_STREAMS_KEY`), saved as one so the bridge restarts once; then whether it
+ * answers that account (`devices-status --streams`).
  */
 export default function RestreamerSettings() {
   const config = useConfig('system');
-  const status = useCommand<RestreamerStatus>('automation-status --streams');
+  const status = useCommand<RestreamerStatus>('devices-status --streams');
   const save = useViewSave();
-  const url = settingOf(config.entries, 'CFG_AUTOMATION_STREAMS_URL');
-  const rtsp = settingOf(config.entries, 'CFG_AUTOMATION_STREAMS_RTSP');
-  const key = settingOf(config.entries, 'CFG_AUTOMATION_STREAMS_KEY');
+  const url = settingOf(config.entries, 'CFG_DEVICES_STREAMS_URL');
+  const rtsp = settingOf(config.entries, 'CFG_DEVICES_STREAMS_RTSP');
+  const key = settingOf(config.entries, 'CFG_DEVICES_STREAMS_KEY');
 
   const saved = useMemo<Draft | undefined>(() => (url && rtsp ? { url: url.value, rtsp: rtsp.value, password: '' } : undefined), [url?.value, rtsp?.value]);
   const [draft, setDraft] = useState<Draft | undefined>(saved);
@@ -83,13 +83,13 @@ export default function RestreamerSettings() {
   const write = async (): Promise<ConfigWriteAnswer[]> => {
     const answers = [
       await config.saveAll({
-        CFG_AUTOMATION_STREAMS_URL: draft.url.trim(),
-        CFG_AUTOMATION_STREAMS_RTSP: draft.rtsp.trim(),
-        ...(draft.password ? { CFG_AUTOMATION_STREAMS_KEY: draft.password } : {}),
+        CFG_DEVICES_STREAMS_URL: draft.url.trim(),
+        CFG_DEVICES_STREAMS_RTSP: draft.rtsp.trim(),
+        ...(draft.password ? { CFG_DEVICES_STREAMS_KEY: draft.password } : {}),
       }),
     ];
     // Another restreamer without a password of its own: the one set here was the old one's.
-    if (!sameHost && !draft.password && key.source === 'system') answers.push(await config.resetAll(['CFG_AUTOMATION_STREAMS_KEY']));
+    if (!sameHost && !draft.password && key.source === 'system') answers.push(await config.resetAll(['CFG_DEVICES_STREAMS_KEY']));
     return answers;
   };
   const onSave = async () => {
@@ -108,7 +108,7 @@ export default function RestreamerSettings() {
                 <SettingSource entry={url!} />
               </Group>
             }
-            description="go2rtc's API, which every camera is given to, and its live view and picture come from. setup.sh --automation runs one beside EiN and sets this. Empty, a camera has no live view, and its picture is asked of the camera itself."
+            description="go2rtc's API, which every camera is given to, and its live view and picture come from. setup.sh --devices runs one beside EiN and sets this. Empty, a camera has no live view, and its picture is asked of the camera itself."
             placeholder='http://127.0.0.1:1984'
             value={draft.url}
             error={urlProblem}

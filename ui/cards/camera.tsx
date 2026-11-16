@@ -66,7 +66,7 @@ function Quiet({ icon, children }: { icon: string; children: ReactNode }) {
 }
 
 /**
- * `/cards/automation/camera`: a camera's picture filling the tile — a new one every `every`
+ * `/cards/devices/camera`: a camera's picture filling the tile — a new one every `every`
  * seconds (10 unless set), or live when `live` is set — from its `stream`, its first unless named,
  * with its name and when the picture is from over its foot. A tap plays it live for five minutes,
  * or goes back to pictures; while a stream cannot be played live the card shows pictures, saying

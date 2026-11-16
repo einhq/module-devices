@@ -38,7 +38,10 @@ const endpointOf = (update: EntityUpdate): { type: EndpointType; schema?: Contro
     case 'number':
       return { type: 'control', schema: defined({ type: 'number' as const, min: update.min, max: update.max, step: update.step }) as ControlSchema };
     case 'text':
-      return { type: 'control', schema: update.options?.length ? { type: 'enum', options: update.options } : { type: 'text' } };
+      return {
+        type: 'control',
+        schema: update.options?.length ? { type: 'enum', options: update.options } : { type: 'text', ...(update.lines ? { lines: true as const } : {}) },
+      };
     case 'color':
       return { type: 'control', schema: { type: 'color' } };
     case 'action':

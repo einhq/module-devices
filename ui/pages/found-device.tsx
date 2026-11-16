@@ -4,7 +4,7 @@ import { formatDateTime, shq } from '@ein/ui/lib';
 import { Alert, Badge, Container, Group, Stack, Table, Text, Title } from '@mantine/core';
 import type { ReactNode } from 'react';
 import { useParams } from 'react-router-dom';
-import type { FoundDetail } from '@automation/api';
+import type { FoundDetail } from '@devices/api';
 
 /** The shell's dialog takes its frame from here, wide for the raw message; as a page, this is its heading. */
 export const handle = { title: 'Found on the network', icon: 'radar', pattern: 'device', dialogSize: 'xl', signedIn: true };
@@ -47,7 +47,7 @@ function Pairs({ rows }: { rows: [string, string | number | undefined][] }) {
  */
 export default function FoundDevicePage() {
   const { id = '' } = useParams();
-  const { data, loading, error } = useCommand<FoundDetail>(`automation-found ${shq(id)}`);
+  const { data, loading, error } = useCommand<FoundDetail>(`devices-found ${shq(id)}`);
   return (
     <Frame>
       {error && <Alert color='red'>{error.message}</Alert>}

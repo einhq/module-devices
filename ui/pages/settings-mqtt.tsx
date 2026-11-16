@@ -4,7 +4,7 @@ import type { ConfigWriteAnswer } from '@ein/api';
 import { SaveBar, settingOf, SettingSource, TablerIcon, useViewSave } from '@ein/ui/components';
 import { useConfig, usePolledCommand } from '@ein/ui/hooks';
 import { formatDateTime } from '@ein/ui/lib';
-import type { AutomationStatus } from '@automation/api';
+import type { DevicesStatus } from '@devices/api';
 
 type Draft = { url: string; user: string; password: string };
 
@@ -26,7 +26,7 @@ const addressProblem = (url: string): string | undefined => {
 };
 
 /** The bridge's connection as a line with its mark. */
-function Connection({ status }: { status: AutomationStatus }) {
+function Connection({ status }: { status: DevicesStatus }) {
   if (!status.configured) return <Text size='sm' c='dimmed'>No broker is set: devices are not heard over MQTT. Those EiN asks over the network are still read.</Text>;
   const since = status.since ? ` since ${formatDateTime(status.since, { dateStyle: 'medium', timeStyle: 'short' })}` : '';
   return (
@@ -46,18 +46,18 @@ function Connection({ status }: { status: AutomationStatus }) {
 }
 
 /**
- * The MQTT broker, a settings view of automation's (`automation.mqtt`, a `settings.views` panel):
+ * The MQTT broker, a settings view of devices' (`devices.mqtt`, a `settings.views` panel):
  * the broker the bridge hears devices on and the account it signs in with
- * (`CFG_AUTOMATION_MQTT_URL`, `_USER`, `_KEY`), saved as one so the bridge restarts once, and
- * whether it is connected now (`automation-status`).
+ * (`CFG_DEVICES_MQTT_URL`, `_USER`, `_KEY`), saved as one so the bridge restarts once, and
+ * whether it is connected now (`devices-status`).
  */
 export default function MqttSettings() {
   const config = useConfig('system');
-  const { data: status, refetch } = usePolledCommand<AutomationStatus>('automation-status');
+  const { data: status, refetch } = usePolledCommand<DevicesStatus>('devices-status');
   const save = useViewSave();
-  const url = settingOf(config.entries, 'CFG_AUTOMATION_MQTT_URL');
-  const user = settingOf(config.entries, 'CFG_AUTOMATION_MQTT_USER');
-  const key = settingOf(config.entries, 'CFG_AUTOMATION_MQTT_KEY');
+  const url = settingOf(config.entries, 'CFG_DEVICES_MQTT_URL');
+  const user = settingOf(config.entries, 'CFG_DEVICES_MQTT_USER');
+  const key = settingOf(config.entries, 'CFG_DEVICES_MQTT_KEY');
 
   const saved = useMemo<Draft | undefined>(() => (url && user ? { url: url.value, user: user.value, password: '' } : undefined), [url?.value, user?.value]);
   const [draft, setDraft] = useState<Draft | undefined>(saved);
@@ -83,13 +83,13 @@ export default function MqttSettings() {
   const write = async (): Promise<ConfigWriteAnswer[]> => {
     const answers = [
       await config.saveAll({
-        CFG_AUTOMATION_MQTT_URL: draft.url.trim(),
-        CFG_AUTOMATION_MQTT_USER: draft.user.trim(),
-        ...(draft.password ? { CFG_AUTOMATION_MQTT_KEY: draft.password } : {}),
+        CFG_DEVICES_MQTT_URL: draft.url.trim(),
+        CFG_DEVICES_MQTT_USER: draft.user.trim(),
+        ...(draft.password ? { CFG_DEVICES_MQTT_KEY: draft.password } : {}),
       }),
     ];
     // Another broker without a password of its own: the one set here was the old broker's.
-    if (!sameHost && !draft.password && key.source === 'system') answers.push(await config.resetAll(['CFG_AUTOMATION_MQTT_KEY']));
+    if (!sameHost && !draft.password && key.source === 'system') answers.push(await config.resetAll(['CFG_DEVICES_MQTT_KEY']));
     return answers;
   };
   const onSave = async () => {
@@ -109,7 +109,7 @@ export default function MqttSettings() {
                 <SettingSource entry={url!} />
               </Group>
             }
-            description='The broker devices talk to, such as mqtt://broker.example:1883, or mqtts:// with its TLS port. Empty, no device is heard over MQTT. setup.sh --automation runs one beside EiN and sets it.'
+            description='The broker devices talk to, such as mqtt://broker.example:1883, or mqtts:// with its TLS port. Empty, no device is heard over MQTT. setup.sh --devices runs one beside EiN and sets it.'
             placeholder='mqtt://host:1883'
             value={draft.url}
             error={problem}
@@ -143,7 +143,7 @@ export default function MqttSettings() {
           {status ? <Connection status={status} /> : <Skeleton height={20} />}
           {status && !status.running && (
             <Alert color='yellow' variant='light' icon={<TablerIcon name='alert-triangle' size={16} />} p='xs'>
-              The bridge is not running, so nothing is heard whatever is set here. Start automation-bridge on Status → Services.
+              The bridge is not running, so nothing is heard whatever is set here. Start devices-bridge on Status → Services.
             </Alert>
           )}
         </Stack>

@@ -1,28 +1,18 @@
 {
-  "sidebar": [
-    {
-      "id": "automation.automations",
-      "section": "system",
-      "label": "Automations",
-      "icon": "topology-star-3",
-      "to": "/automations",
-      "order": 25,
-      "group": "automation"
-    }
-  ],
   "panels": [
     {
-      "id": "automation.live",
+      "id": "devices.live",
       "slot": "device.tabs",
       "label": "Live",
       "icon": "video",
       "route": "/camera-live?device={path}",
       "when": {
-        "has": "stream"
+        "has": "stream",
+        "live": true
       }
     },
     {
-      "id": "automation.found-devices",
+      "id": "devices.found-devices",
       "slot": "devices.header",
       "label": "Found on the network",
       "icon": "radar",
@@ -30,17 +20,17 @@
       "signedIn": true
     },
     {
-      "id": "automation.mqtt",
+      "id": "devices.mqtt",
       "slot": "settings.views",
       "label": "MQTT broker",
-      "description": "The broker the automation bridge hears devices on, and the account it signs in with.",
+      "description": "The broker the devices bridge hears devices on, and the account it signs in with.",
       "icon": "topology-star-3",
       "route": "/settings/mqtt",
       "admin": true,
       "order": 30
     },
     {
-      "id": "automation.restreamer",
+      "id": "devices.restreamer",
       "slot": "settings.views",
       "label": "Restreamer",
       "description": "Where cameras' live views and pictures come from, and where the media service reads their streams.",

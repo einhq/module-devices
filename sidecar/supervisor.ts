@@ -1,6 +1,6 @@
 /**
- * The automation sidecar: the MQTT broker (Mosquitto), the network listener (discovery.ts) and the
- * restreamer (go2rtc) in one container on the host's network, for the Automation module's devices.
+ * The devices sidecar: the MQTT broker (Mosquitto), the network listener (discovery.ts) and the
+ * restreamer (go2rtc) in one container on the host's network, for the Devices module's devices.
  * This supervisor writes what each of them reads, starts them, starts one again when it ends, and
  * prefixes each line of their output with its name.
  *
@@ -21,7 +21,7 @@
  * and go2rtc keeps them in its config, which a restart of go2rtc alone reads again. A new container
  * starts with none, and EiN states them again when it finds them gone.
  *
- * Needs --allow-env, --allow-read, --allow-write (/data, /run/automation), --allow-run and --allow-net
+ * Needs --allow-env, --allow-read, --allow-write (/data, /run/devices), --allow-run and --allow-net
  * (127.0.0.1, to wait for the broker).
  */
 
@@ -48,7 +48,7 @@ const DEVICE_PASSWORD = required('MQTT_DEVICE_PASSWORD');
 const STREAMS_PASSWORD = required('STREAMS_PASSWORD');
 
 const DATA = '/data/mqtt';
-const RUN = '/run/automation';
+const RUN = '/run/devices';
 /** An address to listen on in go2rtc's form: no host for every address. */
 const listen = (portNumber: number): string => `${BIND === '0.0.0.0' ? '' : BIND}:${portNumber}`;
 /** A YAML scalar: JSON's string is YAML's double-quoted one. */

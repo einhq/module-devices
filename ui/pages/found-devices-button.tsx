@@ -2,16 +2,16 @@ import { TablerIcon } from '@ein/ui/components';
 import { usePolledCommand } from '@ein/ui/hooks';
 import { ActionIcon, Button, Indicator } from '@mantine/core';
 import { useNavigate } from 'react-router-dom';
-import type { FoundAnswer } from '@automation/api';
+import type { FoundAnswer } from '@devices/api';
 
 /**
  * The Devices page's way to what was found on the network (a `devices.header` panel): "3 found" while
  * something there can become a device and is none yet, opening the found devices. Nothing for a
- * reader outside the devices group, whom `automation-found` refuses.
+ * reader outside the devices group, whom `devices-found` refuses.
  */
 export default function FoundDevicesButton() {
   const navigate = useNavigate();
-  const { data } = usePolledCommand<FoundAnswer>('automation-found --addable');
+  const { data } = usePolledCommand<FoundAnswer>('devices-found --addable');
   const count = data?.devices.length ?? 0;
   if (count === 0) return null;
   const open = () => navigate('/found-devices');

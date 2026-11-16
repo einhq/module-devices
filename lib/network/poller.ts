@@ -2,8 +2,11 @@
  * Runs the polled drivers (`polled.ts`) in the bridge: registers each with core, and asks each of
  * their devices under /dev as often as its driver says, one device at a time. A device follows its
  * host on the network: its `config.found` is the id the network listener knows it by, so a new
- * address from DHCP is the one asked, and its web page (`url`) follows it; `config.ip` is the address
- * it was last at, and the one a person gives with `device-create --driver network --config ip=…`.
+ * address from DHCP is the one asked, and its web page (`url`) follows it. A host heard on more than
+ * one interface is one host under its own id (`NetworkHosts`), at the address that announced it
+ * last, and `config.found` is set to that id. `config.ip` is the address it was last at, and the one
+ * a person gives with `device-create --driver network --config ip=…`. `config.renderer` is where the
+ * description of its DLNA renderer was last, which follows it to a new address the same way.
  * A driver that is not `addressed` (`http`) asks at an address in the device's config instead, as
  * often as the device's config says.
  */
@@ -13,7 +16,7 @@ import { ADMIN_ACCESS, type Command, type ModuleDevices } from '@ein/client';
 import { DEV_PATH, devicePath } from '@ein/paths';
 import type { DeviceWriter } from '../drivers.ts';
 import type { NetworkHosts } from './found.ts';
-import { webPageOf } from './identify.ts';
+import { rendererOf, webPageOf } from './identify.ts';
 import { changesOf, type PolledDevice, type PolledDriver } from './polled.ts';
 
 type PollerOptions = {
@@ -35,6 +38,18 @@ type Poller = {
 
 const message = (error: unknown): string => error instanceof Error ? error.message : String(error);
 
+/** `url` at the address `ip`, as a description a host gave keeps its port and path when DHCP moves it. */
+const atAddress = (url: string | undefined, ip: string): string | undefined => {
+  if (!url) return undefined;
+  try {
+    const moved = new URL(url);
+    moved.hostname = ip;
+    return moved.href;
+  } catch {
+    return undefined;
+  }
+};
+
 export const startPoller = (options: PollerOptions): Poller => {
   const { cmd, devices, writer, network, log } = options;
   const byName = new Map(options.drivers.map((driver) => [driver.name, driver]));
@@ -53,14 +68,16 @@ export const startPoller = (options: PollerOptions): Poller => {
   const locate = (name: string, attrs: DeviceAttrs): PolledDevice | undefined => {
     const config = attrs.config ?? {};
     if (byName.get(attrs.driver ?? '')?.addressed === false) return { name, ip: '', config };
-    const host = config.found ? network.hosts.get(config.found) : undefined;
+    const host = config.found ? network.host(config.found) : undefined;
     const ip = host?.ip ?? config.ip;
     if (!ip) return undefined;
     const port = Number(config.port) || host?.mdns.find((each) => each.port)?.port;
+    const renderer = atAddress((host && rendererOf(host)) ?? config.renderer, ip);
     return {
       name,
       ip,
       ...(port ? { port } : {}),
+      ...(renderer ? { renderer } : {}),
       ...(config.path ? { path: config.path } : {}),
       ...(config.community ? { community: config.community } : {}),
       ...(Number(config['snmp-port']) ? { snmpPort: Number(config['snmp-port']) } : {}),
@@ -97,10 +114,13 @@ export const startPoller = (options: PollerOptions): Poller => {
       const known = announced.get(name)!;
       for (const change of changesOf(name, polled, known)) await writer.apply(change, driver.name);
       for (const each of polled.entities) known.add(each.entity);
-      const host = attrs.config?.found ? network.hosts.get(attrs.config.found) : undefined;
+      const found = attrs.config?.found ? network.idOf(attrs.config.found) : undefined;
+      const host = found ? network.hosts.get(found) : undefined;
       const url = host ? webPageOf(host) : attrs.url;
-      if (driver.addressed !== false && (where.ip !== attrs.config?.ip || url !== attrs.url)) {
-        await devices.ensureDevice(cmd.access, name, { config: { ...attrs.config, ip: where.ip }, ...(url ? { url } : {}) });
+      const moved = where.ip !== attrs.config?.ip || url !== attrs.url || found !== attrs.config?.found || where.renderer !== attrs.config?.renderer;
+      if (driver.addressed !== false && moved) {
+        const config = { ...attrs.config, ip: where.ip, ...(found ? { found } : {}), ...(where.renderer ? { renderer: where.renderer } : {}) };
+        await devices.ensureDevice(cmd.access, name, { config, ...(url ? { url } : {}) });
       }
       silent.delete(name);
     } catch (error) {
@@ -134,16 +154,17 @@ export const startPoller = (options: PollerOptions): Poller => {
   const unregister = options.drivers.map((driver) =>
     devices.registerDriver(driver.name, {
       description: driver.description,
-      module: 'automation',
+      module: 'devices',
       config: driver.config ?? [{ name: 'ip', label: 'Address on the network', type: 'string', required: true }],
       ...(driver.write
         ? {
-          write: async ({ device, endpoint, attrs, value, by }) => {
+          write: async ({ device, endpoint, attrs, value, by, access }) => {
             const where = locate(device, attrs);
             if (!where) throw new Error(`the address of ${device} is not known`);
-            await driver.write!(where, endpoint, value);
-            log(`${device}/${endpoint} set to ${value} by ${by}`);
+            const answer = await driver.write!(where, endpoint, value, access);
+            log(`${device}/${endpoint} set to ${String(value).replaceAll('\n', ', ')} by ${by}`);
             setTimeout(() => tick(device).catch(() => {}), 1000);
+            return answer;
           },
         }
         : {}),

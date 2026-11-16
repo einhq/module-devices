@@ -3,8 +3,8 @@
  * camera made with its stream's address and password is given to the restreamer with the password
  * in the address and nowhere else, its streams say their size and codec, a frame and the live socket
  * come through core, a stream the restreamer lost is given back when it is asked for, and forgetting
- * the camera takes its streams from the restreamer; `automation-status --streams` says whether the
- * restreamer answers EiN's account. The onvif driver, against a stub camera: its
+ * the camera takes its streams from the restreamer; `devices-status --streams` says whether the
+ * restreamer answers EiN's account; without a restreamer no stream is watched live. The onvif driver, against a stub camera: its
  * profiles become the streams, its events are logged, and its presets and moves are
  * controls.
  */
@@ -72,16 +72,16 @@ Deno.test('a camera address takes its user and password, unless it carries its o
   assertEquals(jpegSize(new Uint8Array([1, 2, 3])), undefined);
 });
 
-Deno.test({ name: 'rtsp cameras are given to the restreamer and watched through core', sanitizeResources: false, sanitizeOps: false }, async (t) => {
+Deno.test({ name: 'rtsp cameras are given to the restreamer and watched through core, live only with one', sanitizeResources: false, sanitizeOps: false }, async (t) => {
   const restreamer = stubRestreamer('streams-secret');
-  const testCtx = createTestContext({ modules: ['automation'], boot: true, env: { CFG_AUTOMATION_MQTT_URL: '' } });
+  const testCtx = createTestContext({ modules: ['devices'], boot: true, env: { CFG_DEVICES_MQTT_URL: '' } });
   await testCtx.setup();
   const admin = await testCtx.server.createShellClient();
   try {
     await admin.execString(
-      `config set CFG_AUTOMATION_STREAMS_URL ${restreamer.url} && config set CFG_AUTOMATION_STREAMS_KEY streams-secret && config set CFG_AUTOMATION_STREAMS_RTSP rtsp://192.0.2.1:8554`,
+      `config set CFG_DEVICES_STREAMS_URL ${restreamer.url} && config set CFG_DEVICES_STREAMS_KEY streams-secret && config set CFG_DEVICES_STREAMS_RTSP rtsp://192.0.2.1:8554`,
     );
-    await admin.execString('service restart automation-bridge');
+    await admin.execString('service restart devices-bridge');
     await until('the rtsp driver', () => admin.execString('devices --drivers'), (text) => /rtsp/.test(text));
 
     await t.step('a camera is given to the restreamer with its password in the address, and nowhere else', async () => {
@@ -94,9 +94,9 @@ Deno.test({ name: 'rtsp cameras are given to the restreamer and watched through 
       ]);
       const info = await admin.execJson<DeviceInfo>('device-show front-door');
       assertEquals([info.class, info.online, info.config?.password], ['camera', true, undefined]);
-      assertEquals(info.endpointList.map((endpoint) => [endpoint.name, endpoint.type, endpoint.stream]), [
-        ['main', 'stream', { codec: 'h264', width: 640, height: 360, audio: true }],
-        ['sub', 'stream', { codec: 'h264', width: 640, height: 360, audio: true }],
+      assertEquals(info.endpointList.map((endpoint) => [endpoint.name, endpoint.type, endpoint.stream, endpoint.live]), [
+        ['main', 'stream', { codec: 'h264', width: 640, height: 360, audio: true }, true],
+        ['sub', 'stream', { codec: 'h264', width: 640, height: 360, audio: true }, true],
       ]);
     });
 
@@ -133,17 +133,25 @@ Deno.test({ name: 'rtsp cameras are given to the restreamer and watched through 
       assertEquals(restreamer.sources.size, 0);
     });
 
-    await t.step('automation-status --streams says the restreamer answers its account, and refuses another password', async () => {
-      assertEquals(await admin.execJson<RestreamerStatus>('automation-status --streams'), {
+    await t.step('devices-status --streams says the restreamer answers its account, and refuses another password', async () => {
+      assertEquals(await admin.execJson<RestreamerStatus>('devices-status --streams'), {
         configured: true,
         url: restreamer.url,
         rtsp: 'rtsp://192.0.2.1:8554',
         answering: true,
         streams: 0,
       });
-      await admin.execString('config set CFG_AUTOMATION_STREAMS_KEY another');
-      const refused = await admin.execJson<RestreamerStatus>('automation-status --streams');
+      await admin.execString('config set CFG_DEVICES_STREAMS_KEY another');
+      const refused = await admin.execJson<RestreamerStatus>('devices-status --streams');
       assertEquals([refused.answering, refused.error], [false, 'the restreamer answered 401']);
+    });
+
+    await t.step('without a restreamer, a camera has no stream watched live', async () => {
+      await admin.execString('config unset CFG_DEVICES_STREAMS_URL && service restart devices-bridge');
+      await until('the rtsp driver', () => admin.execString('devices --drivers'), (text) => /rtsp/.test(text));
+      await admin.execString('device-create Porch --driver rtsp --config url=rtsp://192.0.2.11/main');
+      const info = await admin.execJson<DeviceInfo>('device-show porch');
+      assertEquals(info.endpointList.map((endpoint) => [endpoint.name, endpoint.type, endpoint.live]), [['main', 'stream', undefined]]);
     });
   } finally {
     admin.close();
@@ -155,14 +163,14 @@ Deno.test({ name: 'rtsp cameras are given to the restreamer and watched through 
 Deno.test({ name: 'onvif cameras give their profiles, events and turns', sanitizeResources: false, sanitizeOps: false }, async (t) => {
   const restreamer = stubRestreamer('streams-secret');
   const camera = startOnvifCamera({ user: 'admin', password: 's3cret', clockOffsetMs: 5 * 60_000 });
-  const testCtx = createTestContext({ modules: ['automation'], boot: true, env: { CFG_AUTOMATION_MQTT_URL: '' } });
+  const testCtx = createTestContext({ modules: ['devices'], boot: true, env: { CFG_DEVICES_MQTT_URL: '' } });
   await testCtx.setup();
   const admin = await testCtx.server.createShellClient();
   const show = () => admin.execJson<DeviceInfo>('device-show gate');
   const endpoint = (info: DeviceInfo, name: string) => info.endpointList.find((each) => each.name === name);
   try {
-    await admin.execString(`config set CFG_AUTOMATION_STREAMS_URL ${restreamer.url} && config set CFG_AUTOMATION_STREAMS_KEY streams-secret`);
-    await admin.execString('service restart automation-bridge');
+    await admin.execString(`config set CFG_DEVICES_STREAMS_URL ${restreamer.url} && config set CFG_DEVICES_STREAMS_KEY streams-secret`);
+    await admin.execString('service restart devices-bridge');
     await until('the onvif driver', () => admin.execString('devices --drivers'), (text) => /onvif/.test(text));
 
     await t.step('its largest profile is the main stream and its smallest the sub, at the address it was reached at', async () => {

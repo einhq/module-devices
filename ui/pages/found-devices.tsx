@@ -5,7 +5,7 @@ import { execCommand, notify, openDialog } from '@ein/ui/signals';
 import { Alert, Badge, Box, Button, Card, Group, PasswordInput, Popover, SimpleGrid, Stack, Text, TextInput } from '@mantine/core';
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import type { AdoptAnswer, FoundAnswer, FoundDevice } from '@automation/api';
+import type { AdoptAnswer, FoundAnswer, FoundDevice } from '@devices/api';
 
 export const handle = { fullBleed: true };
 
@@ -47,7 +47,7 @@ function FoundCard({ found, onChanged, onOpen }: { found: FoundDevice; onChanged
   const ignore = async () => {
     setBusy('ignore');
     try {
-      await execCommand(`automation-ignore ${shq(found.id)}${found.ignored ? ' --undo' : ''}`);
+      await execCommand(`devices-ignore ${shq(found.id)}${found.ignored ? ' --undo' : ''}`);
       onChanged();
     } catch (error) {
       failed(error);
@@ -60,7 +60,7 @@ function FoundCard({ found, onChanged, onOpen }: { found: FoundDevice; onChanged
     setBusy('add');
     try {
       const account = signIn ? ` --user ${shq(signIn.user)} --password ${shq(signIn.password)}` : '';
-      const added = await execCommand<AdoptAnswer>(`automation-adopt ${shq(found.id)}${account}`);
+      const added = await execCommand<AdoptAnswer>(`devices-adopt ${shq(found.id)}${account}`);
       setSignIn(null);
       if (added.device) {
         const device = added.device;
@@ -182,7 +182,7 @@ function FoundCard({ found, onChanged, onOpen }: { found: FoundDevice; onChanged
 export default function FoundDevicesPage() {
   const [search, setSearch] = useUrlParam('q');
   const [scope, setScope] = usePersistedState<Scope>('found-devices.scope', 'addable');
-  const { data, loading, error, refetch } = usePolledCommand<FoundAnswer>('automation-found --all');
+  const { data, loading, error, refetch } = usePolledCommand<FoundAnswer>('devices-found --all');
   const all = useMemo(() => data?.devices ?? [], [data]);
 
   const shown = useMemo(() =>
@@ -219,7 +219,7 @@ export default function FoundDevicesPage() {
           {error && <Alert icon={<TablerIcon name='alert-circle' size={16} />} color='red'>{error.message}</Alert>}
           {data && !data.round && (
             <Alert icon={<TablerIcon name='info-circle' size={16} />} color='blue'>
-              The network listener has not been heard. It runs in the automation sidecar beside the MQTT broker, which setup.sh --automation adds.
+              The network listener has not been heard. It runs in the devices sidecar beside the MQTT broker, which setup.sh --devices adds.
             </Alert>
           )}
           {loading && !data ? <PageLoader /> : (

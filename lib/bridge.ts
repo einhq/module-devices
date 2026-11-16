@@ -2,7 +2,7 @@
  * The bridge: one MQTT connection, the sources listening on it, and the device writer they feed.
  * It connects, subscribes to what each source listens on and to every topic a source asked for
  * since, and hands each message to every source, except what the network listener says under
- * `ein/discovery/`, which it keeps as the hosts on the network `automation-found` names. When the
+ * `ein/discovery/`, which it keeps as the hosts on the network `devices-found` names. When the
  * connection is lost it connects again, waiting 1 s, then twice as long each time up to a minute,
  * so a broker that is away never ends the service. Beside the sources it runs the polled drivers
  * (`network`, `ipp`, `snmp`, `cast`, `http`), which ask their devices themselves, and the cameras'
@@ -55,7 +55,7 @@ const message = (error: unknown): string => error instanceof Error ? error.messa
 
 export const runBridge = async (options: BridgeOptions): Promise<void> => {
   const { cmd, sources, writer, stopped } = options;
-  const log = (line: string) => cmd.writeLn(`automation-bridge: ${line}`).catch(() => {});
+  const log = (line: string) => cmd.writeLn(`devices-bridge: ${line}`).catch(() => {});
   let stopping = false;
   stopped.then(() => stopping = true);
 
@@ -83,7 +83,7 @@ export const runBridge = async (options: BridgeOptions): Promise<void> => {
 
   const driverOf = (source: RunningSource): Driver => ({
     description: source.description,
-    module: 'automation',
+    module: 'devices',
     write: async ({ device, endpoint, value, by }) => {
       const publishes = source.encode({ device, entity: endpoint, value: commandValue(value) });
       if (!publishes?.length) throw new Error(`${source.name} has not heard how ${device}/${endpoint} is set`);

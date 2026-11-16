@@ -1,5 +1,5 @@
 /**
- * The bridge's connection against a real broker, when AUTOMATION_TEST_MQTT_URL names one
+ * The bridge's connection against a real broker, when DEVICES_TEST_MQTT_URL names one
  * (`make -C ~/m/git/ein/wow/main mqtt`): a retained message comes back marked retained, filters
  * match, a cleared retained message is gone, and losing the broker resolves `closed`.
  */
@@ -7,7 +7,7 @@
 import { assertEquals } from '@std/assert';
 import { connectMqtt, type MqttMessage } from '../lib/mqtt.ts';
 
-const url = Deno.env.get('AUTOMATION_TEST_MQTT_URL');
+const url = Deno.env.get('DEVICES_TEST_MQTT_URL');
 
 const until = async (what: string, check: () => boolean, timeoutMs = 5000): Promise<void> => {
   const end = Date.now() + timeoutMs;

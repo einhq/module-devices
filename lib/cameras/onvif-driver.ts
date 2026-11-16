@@ -1,6 +1,6 @@
 /**
  * The `onvif` driver: a camera that speaks ONVIF, found on the network by WS-Discovery and added with
- * `automation-adopt <id> --user … --password …`, or made by hand (`device-create 'Front door'
+ * `devices-adopt <id> --user … --password …`, or made by hand (`device-create 'Front door'
  * --driver onvif --config address=192.0.2.10 --config user=admin --config password=…`). The password
  * is the device's secret.
  *
@@ -123,7 +123,7 @@ export const onvifCamera = (options: CameraOptions): CameraKind => {
     const config = attrs.config ?? {};
     if (!config.address) throw new Error('it has no address (config address)');
     const url = new URL(deviceServiceUrl(config.address));
-    const heard = config.found ? network?.hosts.get(config.found) : undefined;
+    const heard = config.found ? network?.host(config.found) : undefined;
     if (heard?.ip) url.hostname = heard.ip;
     return url.toString();
   };

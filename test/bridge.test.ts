@@ -3,14 +3,14 @@
  * devices under /dev with endpoints of the right types, their readings are kept there and reach
  * anyone's queue, a write to a control reaches the device as whoever may give it, a forgotten device
  * stays forgotten, and a reconnect adds nothing. What the network listener says on the same broker
- * is what automation-found lists, matched to those devices.
+ * is what devices-found lists, matched to those devices.
  */
 
 import { assertEquals, assertExists, assertStringIncludes } from '@std/assert';
 import type { DeviceHistory, DeviceInfo, DriverSummary } from '@ein/api';
 import { createTestContext, type ShellClient, testCommands } from '@ein/testing';
-import type { AdoptAnswer, AutomationStatus, FoundAnswer, FoundDetail, NetworkHost } from '@automation/api';
-import { esphomeConfigs, esphomeStates, ippResponse, shellyButton, shellyColorLight, shellyGen1Plug, shellyPlug } from './fixtures.ts';
+import type { AdoptAnswer, DevicesStatus, FoundAnswer, FoundDetail, NetworkHost } from '@devices/api';
+import { esphomeConfigs, esphomeStates, ippResponse, shellyButton, shellyColorLight, shellyGen1Plug, shellyPlug, startRenderer } from './fixtures.ts';
 import { startStubBroker } from './stub-broker.ts';
 
 /** Ask until `check` holds, or fail with what it last saw. */
@@ -29,12 +29,12 @@ const until = async <T>(what: string, read: () => Promise<T>, check: (value: T) 
   throw new Error(`${what}: still ${JSON.stringify(last)}`);
 };
 
-Deno.test({ name: 'automation bridge', sanitizeResources: false, sanitizeOps: false }, async (t) => {
+Deno.test({ name: 'devices bridge', sanitizeResources: false, sanitizeOps: false }, async (t) => {
   const broker = startStubBroker();
   const testCtx = createTestContext({
-    modules: ['automation'],
+    modules: ['devices'],
     boot: true,
-    env: { CFG_AUTOMATION_MQTT_URL: broker.url, CFG_AUTOMATION_MIN_INTERVAL: '0' },
+    env: { CFG_DEVICES_MQTT_URL: broker.url, CFG_DEVICES_MIN_INTERVAL: '0' },
   });
   await testCtx.setup();
   const admin = await testCtx.server.createShellClient();
@@ -52,11 +52,12 @@ Deno.test({ name: 'automation bridge', sanitizeResources: false, sanitizeOps: fa
     const bo = await signIn('bo');
 
     await t.step('the bridge connects and registers a driver for each source', async () => {
-      const status = await until('connected', () => admin.execJson<AutomationStatus>('automation-status'), (status) => status.connected);
-      assertEquals(status.drivers, ['ha-discovery', 'shelly', 'shelly-gen1', 'network', 'ipp', 'snmp', 'cast', 'http', 'rtsp', 'onvif']);
+      const status = await until('connected', () => admin.execJson<DevicesStatus>('devices-status'), (status) => status.connected);
+      assertEquals(status.drivers, ['ha-discovery', 'shelly', 'shelly-gen1', 'network', 'ipp', 'snmp', 'cast', 'dlna', 'http', 'rtsp', 'onvif']);
       const drivers = await anna.execJson<DriverSummary[]>('devices --drivers');
-      assertEquals(drivers.filter((driver) => driver.module === 'automation').map((driver) => [driver.name, driver.running]), [
+      assertEquals(drivers.filter((driver) => driver.module === 'devices').map((driver) => [driver.name, driver.running]), [
         ['cast', true],
+        ['dlna', true],
         ['ha-discovery', true],
         ['http', true],
         ['ipp', true],
@@ -66,7 +67,6 @@ Deno.test({ name: 'automation bridge', sanitizeResources: false, sanitizeOps: fa
         ['shelly', true],
         ['shelly-gen1', true],
         ['snmp', true],
-        ['virtual', true],
       ]);
     });
 
@@ -195,7 +195,7 @@ Deno.test({ name: 'automation bridge', sanitizeResources: false, sanitizeOps: fa
     await t.step('a reconnect replays the retained states, and no endpoint keeps anything new', async () => {
       const before = (await admin.execJson<DeviceHistory>('device-history hall-sensor/temperature')).readings.length;
       broker.dropClients();
-      await until('reconnected', () => admin.execJson<AutomationStatus>('automation-status'), (status) => status.connected && broker.clients() > 0);
+      await until('reconnected', () => admin.execJson<DevicesStatus>('devices-status'), (status) => status.connected && broker.clients() > 0);
       broker.publish('hall-sensor/sensor/temperature/state', '22.0', { retain: true });
       await new Promise((resolve) => setTimeout(resolve, 500));
       assertEquals((await admin.execJson<DeviceHistory>('device-history hall-sensor/temperature')).readings.length, before);
@@ -207,17 +207,17 @@ Deno.test({ name: 'automation bridge', sanitizeResources: false, sanitizeOps: fa
       assertEquals((await admin.exec('stat /dev/hall-sensor')).success, false);
       for (const message of esphomeConfigs) assertEquals(broker.retained.has(message.topic), false, message.topic);
       broker.dropClients();
-      await until('reconnected', () => admin.execJson<AutomationStatus>('automation-status'), (status) => status.connected && broker.clients() > 0);
+      await until('reconnected', () => admin.execJson<DevicesStatus>('devices-status'), (status) => status.connected && broker.clients() > 0);
       await new Promise((resolve) => setTimeout(resolve, 500));
       assertEquals((await admin.exec('stat /dev/hall-sensor')).success, false);
     });
 
     await t.step('the status counts the devices its drivers drive', async () => {
-      const status = await admin.execJson<AutomationStatus>('automation-status');
+      const status = await admin.execJson<DevicesStatus>('devices-status');
       assertExists(status.since);
       assertEquals([status.connected, status.devices, status.endpoints], [true, 3, 12]);
       assertEquals(status.messages > 10, true);
-      assertStringIncludes(await admin.execString('JSON_OUTPUT=0 automation-status --brief'), '3 devices, 12 endpoints');
+      assertStringIncludes(await admin.execString('JSON_OUTPUT=0 devices-status --brief'), '3 devices, 12 endpoints');
     });
 
     await t.step('a first generation plug heard by its power before its relay is a plug all the same', async () => {
@@ -252,27 +252,27 @@ Deno.test({ name: 'automation bridge', sanitizeResources: false, sanitizeOps: fa
       };
       for (const [id, host] of Object.entries(hosts)) broker.publish(`ein/discovery/host/${id}`, JSON.stringify(host), { retain: true });
       broker.publish('ein/discovery/status', JSON.stringify({ round: seen, hosts: 2, broker: '192.168.1.2:1883' }), { retain: true });
-      const all = await until('found', () => anna.execJson<FoundAnswer>('automation-found --all'), (found) => found.devices.length === 2);
+      const all = await until('found', () => anna.execJson<FoundAnswer>('devices-found --all'), (found) => found.devices.length === 2);
       assertEquals(all.broker, '192.168.1.2:1883');
       assertEquals(all.devices.map((each) => [each.id, each.kind, each.device, each.adopt]), [
         ['a1b2c3d4e5f6', 'shelly-gen1', 'shellyplug-s-a1b2c3d4e5f6', 'shelly-gen1'],
         ['a8032ab12345', 'shelly', undefined, 'shelly'],
       ]);
-      assertEquals((await anna.execJson<FoundAnswer>('automation-found --addable')).devices.map((each) => each.id), ['a8032ab12345']);
-      await testCommands(bo).shouldFailWith('automation-found', 'devices group');
-      await testCommands(anna).shouldFailWith('automation-adopt a1b2c3d4e5f6', 'device shellyplug-s-a1b2c3d4e5f6 already');
+      assertEquals((await anna.execJson<FoundAnswer>('devices-found --addable')).devices.map((each) => each.id), ['a8032ab12345']);
+      await testCommands(bo).shouldFailWith('devices-found', 'devices group');
+      await testCommands(anna).shouldFailWith('devices-adopt a1b2c3d4e5f6', 'device shellyplug-s-a1b2c3d4e5f6 already');
     });
 
     await t.step('an ignored host is left out until it is taken back', async () => {
-      await anna.execString('automation-ignore a8032ab12345');
-      assertEquals((await anna.execJson<FoundAnswer>('automation-found')).devices.length, 0);
-      await anna.execString('automation-ignore a8032ab12345 --undo');
-      assertEquals((await anna.execJson<FoundAnswer>('automation-found')).devices.map((each) => each.id), ['a8032ab12345']);
+      await anna.execString('devices-ignore a8032ab12345');
+      assertEquals((await anna.execJson<FoundAnswer>('devices-found')).devices.length, 0);
+      await anna.execString('devices-ignore a8032ab12345 --undo');
+      assertEquals((await anna.execJson<FoundAnswer>('devices-found')).devices.map((each) => each.id), ['a8032ab12345']);
     });
 
     await t.step('a host the listener lets go is gone', async () => {
       broker.publish('ein/discovery/host/a8032ab12345', '', { retain: true });
-      await until('gone', () => anna.execJson<FoundAnswer>('automation-found --all'), (found) => found.devices.length === 1);
+      await until('gone', () => anna.execJson<FoundAnswer>('devices-found --all'), (found) => found.devices.length === 1);
     });
 
     await t.step('a host found on the network is added as a device that says whether it answers', async () => {
@@ -289,17 +289,82 @@ Deno.test({ name: 'automation bridge', sanitizeResources: false, sanitizeOps: fa
           mdns: [{ type: '_smb._tcp', instance: 'Backup box', port, txt: {} }],
         };
         broker.publish('ein/discovery/host/001132000001', JSON.stringify(nas), { retain: true });
-        await until('heard', () => anna.execJson<FoundAnswer>('automation-found --all'), (found) => found.devices.some((each) => each.id === '001132000001'));
-        const added = await anna.execJson<AdoptAnswer>('automation-adopt 001132000001');
+        await until('heard', () => anna.execJson<FoundAnswer>('devices-found --all'), (found) => found.devices.some((each) => each.id === '001132000001'));
+        const added = await anna.execJson<AdoptAnswer>('devices-adopt 001132000001');
         assertEquals([added.driver, added.device], ['network', 'backup-box']);
         const info = await until('answering', () => anna.execJson<DeviceInfo>('device-show backup-box'), (info) => info.online === true);
         assertEquals([info.driver, info.class, info.mac, info.endpointList.map((endpoint) => endpoint.name)], ['network', 'storage', '00:11:32:00:00:01', ['response-time']]);
-        const found = await anna.execJson<FoundAnswer>('automation-found --all');
+        const found = await anna.execJson<FoundAnswer>('devices-found --all');
         assertEquals(found.devices.find((each) => each.id === '001132000001')?.device, 'backup-box');
-        const detail = await anna.execJson<FoundDetail>('automation-found 001132000001');
+        const detail = await anna.execJson<FoundDetail>('devices-found 001132000001');
         assertEquals(detail.host.mdns[0].instance, 'Backup box');
       } finally {
         listener.close();
+      }
+    });
+
+    await t.step('a device added from one interface of a Cast device is asked at the one that announced it last', async () => {
+      const tv = (ip: string, mac: string, seen: string): NetworkHost => ({
+        ip,
+        mac,
+        names: [],
+        seen,
+        ssdp: [],
+        wsd: [],
+        mdns: [{ type: '_googlecast._tcp', instance: 'TV-0A1B2C', port: 8009, txt: { id: '0a1b2c3d4e5f60718293a4b5c6d7e8f9', fn: 'Living room TV' } }],
+      });
+      broker.publish('ein/discovery/host/020000000011', JSON.stringify(tv('127.0.0.2', '02:00:00:00:00:11', new Date(Date.now() - 3_600_000).toISOString())), {
+        retain: true,
+      });
+      broker.publish('ein/discovery/host/020000000012', JSON.stringify(tv('127.0.0.3', '02:00:00:00:00:12', new Date().toISOString())), { retain: true });
+      const heard = await until('heard', () => anna.execJson<FoundAnswer>('devices-found --all'), (found) => found.devices.some((each) => each.kind === 'cast'));
+      assertEquals(heard.devices.filter((each) => each.kind === 'cast').map((each) => [each.id, each.ip]), [['0a1b2c3d4e5f60718293a4b5c6d7e8f9', '127.0.0.3']]);
+      await anna.execString("device-create 'Living room TV' --driver network --config found=020000000011 --config ip=127.0.0.2");
+      const info = await until('followed', () => anna.execJson<DeviceInfo>('device-show living-room-tv'), (info) => info.config?.ip === '127.0.0.3');
+      assertEquals([info.online, info.config?.found], [true, '0a1b2c3d4e5f60718293a4b5c6d7e8f9']);
+      const found = await anna.execJson<FoundAnswer>('devices-found --all');
+      assertEquals(found.devices.filter((each) => each.kind === 'cast').map((each) => each.device), ['living-room-tv']);
+    });
+
+    await t.step('a DLNA renderer is added over UPnP AV, and follows its host', async () => {
+      const renderer = startRenderer('127.0.0.4');
+      try {
+        const location = new URL(renderer.location);
+        location.hostname = '127.0.0.5';
+        broker.publish(
+          'ein/discovery/host/020000000021',
+          JSON.stringify(
+            {
+              ip: '127.0.0.4',
+              mac: '02:00:00:00:00:21',
+              names: [],
+              seen: new Date().toISOString(),
+              mdns: [],
+              wsd: [],
+              ssdp: [{
+                st: 'upnp:rootdevice',
+                location: location.href,
+                friendlyName: 'PHILIPS TV',
+                deviceType: 'urn:schemas-upnp-org:device:MediaRenderer:3',
+                udn: 'uuid:0d1e2a3b-4c5d-1e6f-8a7b-020000000050',
+              }],
+            } satisfies NetworkHost,
+          ),
+          { retain: true },
+        );
+        const id = '0d1e2a3b4c5d1e6f8a7b020000000050';
+        await until('heard', () => anna.execJson<FoundAnswer>('devices-found --all'), (found) => found.devices.some((each) => each.id === id));
+        await anna.execString(`devices-adopt ${id}`);
+        const info = await until('answering', () => anna.execJson<DeviceInfo>('device-show philips-tv'), (info) => info.online === true);
+        assertEquals([info.driver, info.class, info.config?.renderer], ['dlna', 'media', renderer.location]);
+        assertEquals(info.endpointList.map((endpoint) => endpoint.name), ['muted', 'pause', 'play', 'player', 'playing', 'seek', 'show', 'stop', 'volume']);
+        assertEquals((await anna.execJson<{ name: string }[]>('devices --endpoint show')).map((device) => device.name), ['philips-tv']);
+        // What is written to its show reaches the player as the writer, who may read no such file.
+        await testCommands(anna).shouldFailWith('echo /home/anna/none.m4a > /dev/philips-tv/show', 'no such file');
+        await anna.execString('echo 30 > /dev/philips-tv/volume');
+        await until('set', () => Promise.resolve(renderer.state.volume), (volume) => volume === 30);
+      } finally {
+        await renderer.stop();
       }
     });
 
@@ -324,8 +389,8 @@ Deno.test({ name: 'automation bridge', sanitizeResources: false, sanitizeOps: fa
           mdns: [{ type: '_ipp._tcp', instance: 'Office printer', port: server.addr.port, txt: { rp: 'ipp/print', ty: 'Inkjet 7200' } }],
         };
         broker.publish('ein/discovery/host/office-printer', JSON.stringify(printer), { retain: true });
-        await until('heard', () => anna.execJson<FoundAnswer>('automation-found --all'), (found) => found.devices.some((each) => each.id === 'office-printer'));
-        assertEquals((await anna.execJson<AdoptAnswer>('automation-adopt office-printer')).device, 'office-printer');
+        await until('heard', () => anna.execJson<FoundAnswer>('devices-found --all'), (found) => found.devices.some((each) => each.id === 'office-printer'));
+        assertEquals((await anna.execJson<AdoptAnswer>('devices-adopt office-printer')).device, 'office-printer');
         const info = await until('read', () => anna.execJson<DeviceInfo>('device-show office-printer'), (info) => info.endpointList.filter((each) => each.last).length === 3);
         assertEquals([info.driver, info.class, info.online], ['ipp', 'printer', true]);
         assertEquals(info.endpointList.map((endpoint) => [endpoint.name, endpoint.last?.value]), [

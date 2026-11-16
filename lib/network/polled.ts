@@ -8,7 +8,11 @@
  * - `snmp`: a NAS, a router or anything else that answers SNMP; its uptime, load, memory, each
  *   volume's use and its temperatures, from the standard MIBs (Host Resources, net-snmp's UCD);
  * - `cast`: a Google Cast device; whether it plays and what (title, artist and app as one line), its
- *   volume and mute, which can be set, and play, pause and stop;
+ *   volume and mute, which can be set, and play, pause and stop; the recordings, videos, pictures
+ *   and pages whose paths are written to its `show` are played or shown on it (`play.ts`). A TV
+ *   with a DLNA renderer beside Cast is one device, played on and asked over its renderer when Cast
+ *   does not answer;
+ * - `dlna`: a DLNA renderer, a TV's or a speaker's, the same over UPnP AV (`dlna.ts`);
  * - `http`: a web API that answers JSON, at an address rather than a host (`http.ts`): a device's
  *   own, the weather, the price of electricity; the readings a person names in it, and
  *   the controls, each an address asked to set it.
@@ -18,8 +22,11 @@
  */
 
 import { deviceName, type DeviceValue, type DriverConfigField } from '@ein/api';
+import type { Access } from '@ein/client';
 import type { Fetch } from './adopt.ts';
-import { castCommand, castStatus } from './cast.ts';
+import { createCast as castWay } from './cast.ts';
+import { createDlna } from './dlna.ts';
+import { type MediaHost, MediaPlayer, playSettings, type Way } from './play.ts';
 import { checkHttpConfig, controlAddress, deviceClassOfUnit, expandUrl, fetchAnswer, intervalOf, parseControls, parseReadings, readAnswer, switchState } from './http.ts';
 import { getPrinterAttributes } from './ipp.ts';
 import { snmpGet, type SnmpValue, snmpWalk } from './snmp.ts';
@@ -34,6 +41,8 @@ export type PolledDevice = {
   port?: number;
   /** A printer's IPP resource (`ipp/print`). */
   path?: string;
+  /** The address of its DLNA renderer's description, when it has one. */
+  renderer?: string;
   /** The SNMP community it answers. */
   community?: string;
   /** The port its SNMP agent answers on, when not 161. */
@@ -57,8 +66,8 @@ export type PolledDriver = {
   check?(config: Record<string, string>): void;
   /** What the device says now; throws when it does not answer. */
   poll(device: PolledDevice): Promise<{ entities: EntityUpdate[]; values: Record<string, DeviceValue> }>;
-  /** Sends a value written to one of its controls. */
-  write?(device: PolledDevice, endpoint: string, value: DeviceValue): Promise<void>;
+  /** Sends a value written to one of its controls, as `access`, the writer's; a word for the writer, when it has one. */
+  write?(device: PolledDevice, endpoint: string, value: DeviceValue, access: Access): Promise<{ message?: string } | void>;
 };
 
 const entity = (device: string, name: string, more: Partial<EntityUpdate> & Pick<EntityUpdate, 'entityKind'>): EntityUpdate => ({
@@ -230,38 +239,80 @@ const createSnmp = (): PolledDriver => ({
 /** Whether the host at `ip` answers SNMP with `community`. */
 export const answersSnmp = (ip: string, community: string): Promise<boolean> => snmpGet({ host: ip, community }, [OID.descr]).then((values) => values.size > 0, () => false);
 
-const CAST_ACTIONS = ['play', 'pause', 'stop'] as const;
+const PLAYER_ACTIONS = ['play', 'pause', 'stop'] as const;
 
-const cast: PolledDriver = {
-  name: 'cast',
-  description: 'A Google Cast speaker or screen: what it plays, its volume and mute, play, pause and stop',
-  intervalMs: 15_000,
-  poll: async (device) => {
-    const status = await castStatus(device.ip);
-    const entities = [
-      entity(device.name, 'volume', { entityKind: 'number', unit: '%', min: 0, max: 100, step: 1, settable: true }),
-      entity(device.name, 'muted', { entityKind: 'switch', settable: true }),
-      entity(device.name, 'player', { entityKind: 'sensor', label: 'player' }),
-      entity(device.name, 'playing', { entityKind: 'sensor', label: 'playing' }),
-      ...CAST_ACTIONS.map((action) => entity(device.name, action, { entityKind: 'action', settable: true })),
-    ];
-    const what = [status.title, status.artist].filter(Boolean).join(' – ');
-    const values: Record<string, DeviceValue> = {
-      player: (status.player ?? 'IDLE').toLowerCase(),
-      playing: what && status.app ? `${what} (${status.app})` : what || status.app || null,
-    };
-    if (status.volume !== undefined) values.volume = Math.round(status.volume * 100);
-    if (status.muted !== undefined) values.muted = status.muted;
-    return { entities, values };
-  },
-  write: async (device, endpoint, value) => {
-    if (endpoint === 'volume') return await castCommand(device.ip, { type: 'volume', level: Number(value) / 100 });
-    if (endpoint === 'muted') return await castCommand(device.ip, { type: 'mute', muted: value === true });
-    const action = CAST_ACTIONS.find((each) => each === endpoint);
-    if (!action) throw new Error(`${endpoint} cannot be set`);
-    await castCommand(device.ip, { type: action });
-  },
+/** What a person may set on a speaker or a screen, beside its address: how it takes videos and pictures (`play.ts`). */
+const PLAYER_CONFIG: DriverConfigField[] = [
+  { name: 'ip', label: 'Address on the network', type: 'string', required: true },
+  { name: 'video', label: "Videos as h264 (made so when they are not, the default), av1 (EiN's copy) or original", type: 'string' },
+  { name: 'picture', label: 'Seconds a picture shows before the next (10)', type: 'number' },
+];
+
+/**
+ * A driver of speakers and screens that EiN plays on, reached by the ways `waysOf` gives a device:
+ * what it plays, its volume and mute, play, pause, stop and seeking to a second, and `show`, which
+ * takes the paths of recordings, videos, pictures and pages, one a line, plays or shows them, and
+ * says the path of the one it is on.
+ */
+const createPlayerDriver = (name: string, description: string, waysOf: (device: PolledDevice) => Way[], media?: MediaHost): PolledDriver => {
+  const player = new MediaPlayer(media);
+  return {
+    name,
+    description,
+    intervalMs: 15_000,
+    config: PLAYER_CONFIG,
+    check: (config) => void playSettings(config),
+    poll: async (device) => {
+      const status = await player.status(device.name, waysOf(device));
+      const entities = [
+        entity(device.name, 'volume', { entityKind: 'number', unit: '%', min: 0, max: 100, step: 1, settable: true }),
+        entity(device.name, 'muted', { entityKind: 'switch', settable: true }),
+        entity(device.name, 'player', { entityKind: 'sensor', label: 'player' }),
+        entity(device.name, 'playing', { entityKind: 'sensor', label: 'playing' }),
+        ...PLAYER_ACTIONS.map((action) => entity(device.name, action, { entityKind: 'action', settable: true })),
+        entity(device.name, 'seek', { entityKind: 'number', unit: 's', min: 0, step: 1, settable: true, label: 'seek to' }),
+        ...(media ? [entity(device.name, 'show', { entityKind: 'text', lines: true, settable: true })] : []),
+      ];
+      const values: Record<string, DeviceValue> = { player: status.player, playing: status.playing };
+      if (media) values.show = player.showing(device.name) ?? null;
+      if (status.volume !== undefined) values.volume = Math.round(status.volume * 100);
+      if (status.muted !== undefined) values.muted = status.muted;
+      return { entities, values };
+    },
+    write: async (device, endpoint, value, access) => {
+      const ways = waysOf(device);
+      if (endpoint === 'show' && media) return await player.play(device.name, ways, String(value), access, playSettings(device.config));
+      if (endpoint === 'volume') return await player.command(device.name, ways, { type: 'volume', level: Number(value) / 100 });
+      if (endpoint === 'muted') return await player.command(device.name, ways, { type: 'mute', muted: value === true });
+      if (endpoint === 'seek') return await player.command(device.name, ways, { type: 'seek', seconds: Number(value) });
+      const action = PLAYER_ACTIONS.find((each) => each === endpoint);
+      if (!action) throw new Error(`${endpoint} cannot be set`);
+      await player.command(device.name, ways, { type: action });
+    },
+  };
 };
+
+/** A device's DLNA renderer, as a way; throws when its address is not known. */
+const rendererOf = (fetcher: Fetch, device: PolledDevice): Way => {
+  if (!device.renderer) throw new Error('the address of its renderer is not known');
+  return createDlna(fetcher, device.renderer);
+};
+
+const createCast = (fetcher: Fetch, media?: MediaHost): PolledDriver =>
+  createPlayerDriver(
+    'cast',
+    'A Google Cast speaker or screen: what it plays, its volume and mute, play, pause and stop; the recordings, videos, pictures and pages whose paths are written to its show, played or shown on it',
+    (device) => [castWay(device.ip), ...(device.renderer ? [rendererOf(fetcher, device)] : [])],
+    media,
+  );
+
+const createDlnaDriver = (fetcher: Fetch, media?: MediaHost): PolledDriver =>
+  createPlayerDriver(
+    'dlna',
+    'A DLNA renderer, a TV or a speaker: what it plays, its volume and mute, play, pause and stop; the recordings, videos, pictures and pages whose paths are written to its show, played or shown on it',
+    (device) => [rendererOf(fetcher, device)],
+    media,
+  );
 
 const createHttp = (fetcher: Fetch): PolledDriver => ({
   name: 'http',
@@ -307,11 +358,18 @@ const createHttp = (fetcher: Fetch): PolledDriver => ({
   },
 });
 
-/** The polled drivers, by name. */
-export const createPolledDrivers = (fetcher: Fetch): PolledDriver[] => [network, createIpp(fetcher), createSnmp(), cast, createHttp(fetcher)];
+/** The polled drivers, by name; without `media`, nothing written to a speaker or screen is played. */
+export const createPolledDrivers = (fetcher: Fetch, media?: MediaHost): PolledDriver[] => [
+  network,
+  createIpp(fetcher),
+  createSnmp(),
+  createCast(fetcher, media),
+  createDlnaDriver(fetcher, media),
+  createHttp(fetcher),
+];
 
 /** The names of the polled drivers. */
-export const POLLED_DRIVERS: readonly string[] = ['network', 'ipp', 'snmp', 'cast', 'http'];
+export const POLLED_DRIVERS: readonly string[] = ['network', 'ipp', 'snmp', 'cast', 'dlna', 'http'];
 
 /** What one poll says, as the changes the device writer applies. */
 export const changesOf = (device: string, polled: { entities: EntityUpdate[]; values: Record<string, DeviceValue> }, known: Set<string>): DeviceChange[] => [

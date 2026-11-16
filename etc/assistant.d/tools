@@ -1,11 +1,6 @@
-# The device commands the assistant offers its model as tools, one a line: core's, and automation's
-# own. Each is described by its own --help; one that writes becomes a proposal the user runs.
+# The device commands the assistant offers its model as tools, one a line: core's, and the devices
+# module's own. Each is described by its own --help; one that writes becomes a proposal the user runs.
 devices
 device-show
 device-history
-automation-status
-automations
-automation-show
-automation-check
-automation-new
-automation-set
+devices-status
