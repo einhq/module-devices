@@ -74,6 +74,22 @@ export const valueOfText = (text: string): Value => {
   return Number.isFinite(n) ? n : trimmed;
 };
 
+/**
+ * What a shell line or script printed, split over its outputs: each line `name=value` of a name in
+ * `outputs`, in the order printed, and the rest as one value for `out`.
+ */
+export const printedOutputs = (text: string, outputs: readonly string[]): { sends: [string, Value][]; rest: Value } => {
+  const sends: [string, Value][] = [];
+  const rest: string[] = [];
+  for (const line of text.split('\n')) {
+    const at = line.indexOf('=');
+    const name = at > 0 ? line.slice(0, at).trim() : '';
+    if (name && outputs.includes(name)) sends.push([name, valueOfText(line.slice(at + 1))]);
+    else rest.push(line);
+  }
+  return { sends, rest: valueOfText(rest.join('\n')) };
+};
+
 export const AGGREGATES = ['avg', 'min', 'max', 'sum', 'count', 'any', 'all', 'last'] as const;
 export type Aggregate = typeof AGGREGATES[number];
 

@@ -175,14 +175,14 @@ nodes:
   {
     name: 'tour',
     label: 'Tour of every node',
-    description: 'Eight small flows, every kind of node among them, with invented devices: to simulate, read and copy from',
+    description: 'Nine small flows, every kind of node among them, with invented devices: to simulate, read and copy from',
     // The same text as etc/automations.d/tour.yaml, the module's own automation/tour: a test keeps them one.
-    yaml: `# A tour of automations: eight small flows, every kind of node among them. Its devices are invented
+    yaml: `# A tour of automations: nine small flows, every kind of node among them. Its devices are invented
 # (example-…), so it switches nothing real. Open it under System → Automations and simulate it with
 # the flask, feeding it readings and presses by hand; or make one of your own from it (New, starting
 # point Tour; or automation-new <name> --from tour) and set your own devices. It comes off, and is
 # best left so.
-description: A tour of every kind of node in eight small flows; its devices are invented, so simulate it or copy it
+description: A tour of every kind of node in nine small flows; its devices are invented, so simulate it or copy it
 enabled: false
 nodes:
   # 1. Motion light. The hall lamp on at motion while it is dark and someone is home, off five
@@ -265,6 +265,19 @@ nodes:
   upkeep-failed: { type: event-in, event: pipeline.instance.failed, with: pipeline=example-upkeep, pos: [0, 2600], to: [failed-run, raise-it] }
   failed-run: { type: debug, pos: [300, 2540] }
   raise-it: { type: event-out, event: example.upkeep.failed, pos: [300, 2660] }
+
+  # 9. A script of its own. Whether to heat, decided by a script from what is wired in, each as a
+  #    variable ($indoor_now, $away_mode); it prints heat=on or heat=off, sent on its output heat,
+  #    and a reason on note. A module's automation has no scripts, so make heating.sh on the
+  #    Scripts tab of a copy of your own, such as:
+  #      if [ "$away_mode" = on ]; then echo heat=off; echo note=away
+  #      else echo heat=on; echo "note=indoors $indoor_now"; fi
+  #    script.
+  indoor-now: { type: link-in, name: indoor-average, pos: [0, 2820], to: [decide] }
+  away-mode: { type: device, label: Away mode, endpoint: example-house/away, pos: [0, 2940], to: [decide] }
+  decide: { type: script, script: heating.sh, outputs: [heat, note], pos: [300, 2880], to: { heat: [boiler], note: [why] } }
+  boiler: { type: control, endpoint: example-boiler/switch-0, pos: [600, 2820] }
+  why: { type: debug, pos: [600, 2940] }
 `,
   },
 ];

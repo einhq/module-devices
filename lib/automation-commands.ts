@@ -19,6 +19,8 @@ import {
   onlineOf,
   type parseAutomationText,
   readAutomationFile,
+  scriptNames,
+  scriptProblem,
 } from './automation-files.ts';
 import { AutomationEngine, readsOf } from './automations/engine.ts';
 import type { Example } from './automations/examples.ts';
@@ -82,6 +84,7 @@ export const detailOf = async (cmd: Command, file: AutomationFile): Promise<Auto
   ...await summaryOf(cmd, file),
   text: file.text,
   ...(file.spec && typeof file.spec === 'object' ? { spec: placedSpec(file.spec) } : {}),
+  scripts: file.module ? [] : await scriptNames(cmd.sys.vfs, cmd.access, file.name),
 });
 
 /** Turn an automation on or off: a person's by its file's attr, a module's in the administrator's switches. */
@@ -107,8 +110,9 @@ export const yamlOf = (spec: AutomationSpec): string => stringify(canonicalSpec(
 /**
  * What is wrong with an automation as the caller would run it, and what each of its nodes would say
  * now: the latest readings the caller may read sent through it, no action run. An endpoint the
- * caller may not read, a control they may not write, a folder they may not read, or an event they
- * may not raise is a problem, as it is for the engine when the caller owns it. So is a node left
+ * caller may not read, a control they may not write, a folder they may not read, an event they may
+ * not raise, or a script of the named automation's they may not run or others may change is a
+ * problem, as it is for the engine when the caller owns it. So is a node left
  * out of the flow, which the engine runs as it is: one that is no action and sends nowhere, or one
  * nothing sends to that only acts on what comes in.
  */
@@ -123,7 +127,11 @@ export const checkAutomation = async (cmd: Command, read: ReturnType<typeof pars
       problems.push({ node: id, message: 'nothing sends to it: wire into it what it should act on' });
     }
   }
-  const { endpoints, controls, devices, folders, raises } = readsOf(read.automation);
+  const { endpoints, controls, devices, folders, raises, scripts } = readsOf(read.automation);
+  for (const script of name && !name.includes('/') ? scripts : []) {
+    const problem = await scriptProblem(cmd.sys.vfs, cmd.access, name!, script);
+    if (problem) problems.push({ message: problem.replace(/^its owner may not/, 'you may not') });
+  }
   for (const folder of folders) {
     if (!(await folderReadable(cmd.sys.vfs, cmd.access, folder))) problems.push({ message: `you may not read the folder ${folder}, or there is none` });
   }

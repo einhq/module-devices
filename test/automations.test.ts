@@ -54,7 +54,7 @@ const automationOf = (yaml: string) => {
 
 const problemsOf = (yaml: string) => readAutomation(parse(yaml)).problems;
 
-/** An engine on a fake clock, its actions kept as `<value> > <endpoint>` or the shell line. */
+/** An engine on a fake clock, its actions kept as `<value> > <endpoint>`, the shell line, or `scripts/<name>`. */
 const engineOf = (yaml: string, options: { clock?: FakeClock; shell?: (line: string, env: Record<string, string>) => string } = {}) => {
   const clock = options.clock ?? new FakeClock();
   const acts: string[] = [];
@@ -73,8 +73,9 @@ const engineOf = (yaml: string, options: { clock?: FakeClock; shell?: (line: str
         acts.push(`${action.type} about ${action.subject} ${JSON.stringify(action.data)}`);
         return Promise.resolve();
       }
-      acts.push(action.line);
-      return Promise.resolve(options.shell?.(action.line, action.env) ?? '');
+      const line = action.kind === 'script' ? `scripts/${action.script}` : action.line;
+      acts.push(line);
+      return Promise.resolve(options.shell?.(line, action.env) ?? '');
     },
     link: (name, message) => links.push({ name, value: message.value }),
     log: (entry) => logs.push(entry),
@@ -179,6 +180,13 @@ Deno.test('graphs: what is wrong is said, with the node it is in', () => {
     ['nodes: {a: {type: event-in, event: a.b, with: pipeline}}', 'with takes key=value pairs', 'a'],
     ['nodes: {a: {type: event-out, event: "automation.*"}}', 'event takes an event such as automation.porch.arrived', 'a'],
     ['nodes: {a: {type: debug, pos: [1]}}', 'pos takes [x, y]', 'a'],
+    ['nodes: {a: {type: script}}', 'script is needed', 'a'],
+    ['nodes: {a: {type: script, script: ../check.sh}}', "the name of one of the automation's scripts", 'a'],
+    ['nodes: {a: {type: script, script: check.sh, outputs: [heat, out]}}', 'names out', 'a'],
+    ['nodes: {a: {type: shell, run: x, outputs: ["a b"]}}', 'outputs takes names', 'a'],
+    ['nodes: {a: {type: script, script: check.sh, to: {heat: [b]}}, b: {type: debug}}', 'no output heat', 'a'],
+    ['nodes: {PATH: {type: button, to: [a]}, a: {type: script, script: check.sh}}', '$PATH would be the environment', 'a'],
+    ['nodes: {1st: {type: button, to: [a]}, a: {type: shell, run: x}}', "$1st is no variable's name", 'a'],
     ['when: {event: a/b}\nnodes: {}', 'when: an automation has description, enabled and nodes'],
     ['description: x', 'nodes takes the nodes by id'],
   ];
@@ -326,6 +334,47 @@ Deno.test('engine: a press toggles, runs a line with its value, and is written t
   await engine.idle();
   assertEquals(acts.filter((act) => act.startsWith('toggle')).length, 3, 'a toggle is written every time');
   assertThrows(() => engine.press('toggle'), Error, 'no button toggle');
+});
+
+Deno.test('engine: a script is given what is wired in, and its name=value lines go on the outputs it names', async () => {
+  const yaml = `
+nodes:
+  indoor: {type: device, endpoint: hall/temperature, to: [check]}
+  set-point: {type: device, endpoint: hall/setpoint, to: [check]}
+  check: {type: script, script: check.sh, outputs: [heat, note], to: {heat: [heater], note: [show], out: [rest]}}
+  heater: {type: control, endpoint: boiler/switch-0}
+  show: {type: debug}
+  rest: {type: debug}
+`;
+  const automation = automationOf(yaml);
+  assertEquals(automation.nodes.get('check')!.outputs, ['heat', 'note', 'out']);
+  assertEquals(readsOf(automation).scripts, ['check.sh']);
+  const given: Record<string, string>[] = [];
+  const { engine, acts, logs, reading } = engineOf(yaml, {
+    shell: (_line, env) => {
+      given.push(env);
+      return Number(env.indoor) < Number(env.set_point) ? 'heat=on\nnote=cold, at 18\nchecked' : 'heat=off\n';
+    },
+  });
+  reading('hall/setpoint', 21);
+  await engine.idle();
+  reading('hall/temperature', 18);
+  await engine.idle();
+  assertEquals(given.map((env) => [env.VALUE, env.TOPIC, env.indoor, env.set_point]), [['21', 'hall/setpoint', undefined, '21'], ['18', 'hall/temperature', '18', '21']]);
+  assertEquals(acts, ['scripts/check.sh', 'off > boiler/switch-0', 'scripts/check.sh', 'on > boiler/switch-0']);
+  assertEquals(logs.filter((log) => log.kind === 'debug').map((log) => [log.node, log.value]), [['rest', null], ['show', 'cold, at 18'], ['rest', 'checked']]);
+});
+
+Deno.test('engine: a shell line with outputs sends its lines on them, and all it printed on out without', async () => {
+  const outputs = `nodes: {go: {type: button, to: [run]}, run: {type: shell, run: x, outputs: [count], to: {count: [a], out: [b]}}, a: {type: debug}, b: {type: debug}}`;
+  const one = engineOf(outputs, { shell: () => 'count=3\ncount=4\n' });
+  one.engine.press('go');
+  await one.engine.idle();
+  assertEquals(one.logs.filter((log) => log.kind === 'debug').map((log) => [log.node, log.value]), [['a', 3], ['a', 4], ['b', null]]);
+  const plain = engineOf(`nodes: {go: {type: button, to: [run]}, run: {type: shell, run: x, to: [b]}, b: {type: debug}}`, { shell: () => 'count=3\n' });
+  plain.engine.press('go');
+  await plain.engine.idle();
+  assertEquals(plain.logs.filter((log) => log.kind === 'debug').map((log) => log.value), ['count=3']);
 });
 
 Deno.test('engine: switch, math over senders, aggregate, set', async () => {

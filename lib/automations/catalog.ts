@@ -33,6 +33,10 @@ type SettingType =
   | 'expression'
   /** A shell command line. */
   | 'line'
+  /** A script's name among the automation's own, the files under its `scripts/`: `check.sh`. */
+  | 'script'
+  /** Names, each an output of the node's own: `[heat, note]`. */
+  | 'names'
   /** An event's type, dotted words; an input's may have `*` for one word and `#` for any number. */
   | 'event'
   /** A switch's cases: `{cold: {below: 18}, warm: {above: 23}}`, each an output of its own. */
@@ -78,6 +82,12 @@ export const COMMON_KEYS = ['type', 'label', 'pos', 'to'] as const;
 const BOOL = ['out', 'true', 'false'] as const;
 const OUT = ['out'] as const;
 const EVERY: SettingSpec = { name: 'every', type: 'flag', label: 'Send every result', help: 'Send each result, not only when it changes' };
+const OUTPUTS: SettingSpec = {
+  name: 'outputs',
+  type: 'names',
+  label: 'Outputs',
+  help: 'Outputs of its own, such as heat and note: a printed line heat=on sends on on heat',
+};
 const LOCATION: SettingSpec = {
   name: 'location',
   type: 'location',
@@ -413,13 +423,31 @@ const kinds: KindSpec[] = [
     label: 'Shell',
     color: 'lime',
     about:
-      "Runs **Run** as the automation's owner, with the value in `$VALUE` and where it came from in `$TOPIC`, one at a time in order. What it prints is sent on: a number as a number, nothing as null. A line that fails or runs past **Timeout** is a problem on the card and in the run log.",
+      "Runs **Run** as the automation's owner, with the value in `$VALUE`, where it came from in `$TOPIC` and each node wired in by its name, with - as _ (`$outdoor_sensor`), one at a time in order. A line it prints such as `heat=on` sends `on` on the output `heat` when **Outputs** names it; what else it prints is sent on out, a number as a number, nothing as null. A line that fails or runs past **Timeout** is a problem on the card and in the run log. A script shared by several automations goes on the PATH and is run from here.",
     icon: 'terminal-2',
     description: "Runs a command line as the automation's owner; what it prints is sent on",
     input: true,
     outputs: OUT,
     settings: [
-      { name: 'run', type: 'line', label: 'Run', required: true, help: 'The value is $VALUE, where it came from $TOPIC' },
+      { name: 'run', type: 'line', label: 'Run', required: true, help: 'The value is $VALUE, where it came from $TOPIC, each node wired in $<its name>' },
+      OUTPUTS,
+      { name: 'timeout', type: 'duration', label: 'Timeout', help: '30s unless set' },
+    ],
+  },
+  {
+    type: 'script',
+    group: 'action',
+    label: 'Script',
+    color: 'teal',
+    about:
+      "Runs **Script**, one of the automation's own scripts (its Scripts tab), as the automation's owner, with the value in `$VALUE`, where it came from in `$TOPIC` and each node wired in by its name, with - as _ (`$outdoor_sensor`), one at a time in order. A line it prints such as `heat=on` sends `on` on the output `heat` when **Outputs** names it; what else it prints is sent on out, a number as a number, nothing as null. A script that fails or runs past **Timeout** is a problem on the card and in the run log. The automation is not run while its owner may not run the script, or anyone else may change it.",
+    icon: 'script',
+    description: "Runs one of the automation's own scripts; what it prints is sent on its outputs",
+    input: true,
+    outputs: OUT,
+    settings: [
+      { name: 'script', type: 'script', label: 'Script', required: true, help: "One of the automation's own scripts, such as check.sh" },
+      OUTPUTS,
       { name: 'timeout', type: 'duration', label: 'Timeout', help: '30s unless set' },
     ],
   },

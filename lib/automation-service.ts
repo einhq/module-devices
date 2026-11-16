@@ -6,10 +6,12 @@
  *
  * Each runs with its owner's rights: it hears only the endpoints its owner may read and the events
  * about nodes its owner may read, is primed with the latest readings as its owner reads them,
- * writes controls and raises events through the VFS as its owner, and runs shell lines through
- * `runas` as its owner. Its file nodes watch their folders through a VFS subscription as its owner,
- * which passes on only the files the owner may read. Those rights are checked when it is read and
- * every minute after; one that lost them is held back, saying why. An event an automation raised
+ * writes controls and raises events through the VFS as its owner, and runs shell lines and its own
+ * scripts (children of its file) through `runas` as its owner, in text mode. Its file nodes watch
+ * their folders through a VFS subscription as its owner, which passes on only the files the owner
+ * may read. Those rights are checked when it is read, every minute after, and when anything under
+ * its file changes; one that lost them is held back, saying why. A script is checked once more
+ * just before it runs: held back as well while anyone but the owner may change it. An event an automation raised
  * reaches pipelines, not automations, so two cannot set each other off for ever.
  *
  * A file whose change does not change how it runs (a node moved, a label) keeps its engine and
@@ -51,6 +53,8 @@ import {
   readAutomationFiles,
   readText,
   runLogPath,
+  scriptProblem,
+  scriptsPath,
   statePath,
   writeText,
 } from './automation-files.ts';
@@ -67,7 +71,6 @@ import {
   readsOf,
 } from './automations/engine.ts';
 import { fingerprint } from './automations/graph.ts';
-import { valueOfText } from './automations/values.ts';
 import {
   AUTOMATION_EVENTS_QUEUE,
   AUTOMATIONS_DIR,
@@ -93,7 +96,7 @@ const RECHECK_MS = 60_000;
 const SAVE_MS = 5000;
 /** A message said this long before the service started moves state but acts on nothing; a deadline this late is dropped. */
 const STALE_MS = 60_000;
-/** The most of a shell line's output kept as the value it sends on. */
+/** The most of what a shell line or script prints that is read for what it sends on. */
 const OUTPUT_MAX = 4096;
 
 type ServiceOptions = {
@@ -254,16 +257,24 @@ export const runAutomationService = async ({ cmd, stopped, automationGid }: Serv
       const event: DomainEvent = { id: crypto.randomUUID(), type: action.type, subject: action.subject, time: Date.now(), source: RAISED_BY, data: action.data };
       return await writeAs(run, EVENTS_NODE_PATH, JSON.stringify(event));
     }
-    const line = `export ${Object.entries(action.env).map(([name, value]) => `${name}=${shq(value)}`).join(' ')}; ${action.line}`;
-    const result = await cmd.execute(`runas ${run.file.owner} ${shq(line)}`, { timeoutMs: action.timeoutMs });
-    if (result.timedOut) throw new Error(`${action.line}: still running after ${action.timeoutMs / 1000} s, so stopped`);
-    if (result.code !== 0) throw new Error(`${action.line} failed (${result.code})${result.stderr.trim() ? `: ${result.stderr.trim().slice(0, 300)}` : ''}`);
-    return valueOfText(result.stdout.slice(0, OUTPUT_MAX));
+    const what = action.kind === 'script' ? `scripts/${action.script}` : action.line;
+    if (action.kind === 'script') {
+      // Again at the moment it runs: whoever could change it between two checks would run as the owner.
+      const problem = await scriptProblem(vfs, run.access, run.file.name, action.script);
+      if (problem) throw new Error(problem);
+    }
+    const exports = Object.entries(action.env).map(([name, value]) => `${name}=${shq(value)}`).join(' ');
+    // As in a terminal, whatever shell the service was started from: commands print text, not JSON.
+    const command = `unset JSON_OUTPUT; export ${exports}; ${action.kind === 'script' ? shq(`${scriptsPath(run.file.name)}/${action.script}`) : action.line}`;
+    const result = await cmd.execute(`runas ${run.file.owner} ${shq(command)}`, { timeoutMs: action.timeoutMs });
+    if (result.timedOut) throw new Error(`${what}: still running after ${action.timeoutMs / 1000} s, so stopped`);
+    if (result.code !== 0) throw new Error(`${what} failed (${result.code})${result.stderr.trim() ? `: ${result.stderr.trim().slice(0, 300)}` : ''}`);
+    return result.stdout.slice(0, OUTPUT_MAX);
   };
 
   /** The run's rights over what it reads and writes, or why it may not run. */
   const rights = async (file: AutomationFile, access: Access): Promise<AutomationProblem[]> => {
-    const { endpoints, controls, devices, folders, raises } = readsOf(file.automation!);
+    const { endpoints, controls, devices, folders, raises, scripts } = readsOf(file.automation!);
     const problems: AutomationProblem[] = [];
     if (raises.length && !(await mayRaise(access))) problems.push({ message: `its owner may not raise events: only the administrator writes ${EVENTS_NODE_PATH}` });
     for (const endpoint of endpoints) {
@@ -277,6 +288,10 @@ export const runAutomationService = async ({ cmd, stopped, automationGid }: Serv
     }
     for (const folder of folders) {
       if (!(await folderReadable(vfs, access, folder))) problems.push({ message: `its owner may not read the folder ${folder}, or there is none` });
+    }
+    for (const script of scripts) {
+      const problem = await scriptProblem(vfs, access, file.name, script);
+      if (problem) problems.push({ message: problem });
     }
     return problems;
   };
@@ -441,10 +456,17 @@ export const runAutomationService = async ({ cmd, stopped, automationGid }: Serv
   };
 
   let reload: ReturnType<typeof setTimeout> | undefined;
+  let scriptsChanged = false;
   const watch = (dir: string) =>
-    vfs.subscribe?.(() => cmd.access, () => {
+    vfs.subscribe?.(() => cmd.access, (event) => {
+      // A change below an automation's file is to its scripts, which its rights are checked on.
+      if (`${event.path} ${'fromPath' in event ? event.fromPath ?? '' : ''}`.includes('.yaml/')) scriptsChanged = true;
       clearTimeout(reload);
-      reload = setTimeout(() => load().catch((error) => log(`reading the automations: ${error}`)), RELOAD_DELAY_MS);
+      reload = setTimeout(() => {
+        const recheck = scriptsChanged;
+        scriptsChanged = false;
+        load(recheck).catch((error) => log(`reading the automations: ${error}`));
+      }, RELOAD_DELAY_MS);
     }, { pathPrefix: dir });
   const subscriptions = [await watch(AUTOMATIONS_DIR), await watch(MODULE_AUTOMATIONS_DIR)];
 

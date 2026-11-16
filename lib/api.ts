@@ -112,6 +112,8 @@ export type AutomationDetail = AutomationSummary & {
   text: string;
   /** Its parsed YAML, a node without `pos` given one; absent when it is not YAML. */
   spec?: AutomationSpec;
+  /** The names of its own scripts, the files under `<file>/scripts/`, that the caller may see. */
+  scripts: string[];
 };
 
 /** `automation-set` and `automation-new`: whether it was written, and what is wrong with it. */

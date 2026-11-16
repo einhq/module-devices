@@ -141,7 +141,15 @@ Deno.test('simulation: the tour is shipped as the starting point is, off, with e
   await sim.settled();
   assertEquals(said(sim, 'control'), ['would set example-hall-lamp/switch-0 to on']);
   assertEquals(said(sim, 'link').length > 0, true, 'flow 4 shares the average');
-  assertEquals(said(sim, 'shell'), ['would run: echo "too warm, or a window open: $TOPIC said $VALUE" (VALUE=on)'], 'flow 5 hears it, warm ten minutes');
+  assertEquals(
+    said(sim, 'shell'),
+    [
+      'would run: scripts/heating.sh (VALUE=26 away_mode=off)',
+      'would run: scripts/heating.sh (VALUE=26.5 away_mode=off)',
+      'would run: echo "too warm, or a window open: $TOPIC said $VALUE" (VALUE=on)',
+    ],
+    'flow 9 hears each average with whether anyone is away, and flow 5 hears it is warm ten minutes',
+  );
 
   sim.addFile('scans', 'letter.pdf');
   sim.addFile('scans', 'notes.txt');

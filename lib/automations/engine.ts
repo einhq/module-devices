@@ -3,8 +3,8 @@
  * kind says, and its actions are handed to `act` one after another.
  *
  * A message is a value, where it came from (`topic`: an endpoint, a folder, `clock`, `button`, an
- * event's type) and when. Every node has one input; `and`, `or`, `math` and `aggregate` keep the
- * latest value of each node wired into them. A node that says true or false (compare, and, or, not, timer, held, between, online)
+ * event's type) and when. Every node has one input; `and`, `or`, `math`, `aggregate`, `shell` and
+ * `script` read the latest value of each node wired into them. A node that says true or false (compare, and, or, not, timer, held, between, online)
  * sends only when that changes, unless its `every` is set.
  *
  * Quiet: what the engine is primed with (each endpoint's latest reading, read when it starts) and a
@@ -19,7 +19,7 @@
 import type { AutomationNodeStatus, AutomationValue as Value } from '../api.ts';
 import type { Automation, Node } from './graph.ts';
 import { evaluate, type Expression, NoValueYet } from './math.ts';
-import { type Aggregate, aggregate, nameMatches, passes, same, type Test, truthy, valueOfText, valueText } from './values.ts';
+import { type Aggregate, aggregate, nameMatches, passes, printedOutputs, same, type Test, truthy, valueText } from './values.ts';
 import { nameOfSender } from './graph.ts';
 import { type Location, minuteOf, type TimeOfDay } from './sun.ts';
 
@@ -71,6 +71,8 @@ export type FactEvent = {
 export type Action =
   | { kind: 'control'; endpoint: string; value: string }
   | { kind: 'shell'; line: string; env: Record<string, string>; timeoutMs: number }
+  /** One of the automation's own scripts, by its name under `scripts/`. */
+  | { kind: 'script'; script: string; env: Record<string, string>; timeoutMs: number }
   | { kind: 'event'; type: string; subject: string; data: Record<string, string> };
 
 export type LogEntry = {
@@ -101,7 +103,7 @@ type EngineOptions = {
   schedule(fn: () => void, ms: number): () => void;
   now(): number;
   localTime(ms: number): LocalTime;
-  /** Do an action as the automation's owner; a shell's answer is what it printed. */
+  /** Do an action as the automation's owner; a shell's or script's answer is what it printed. */
   act(node: string, action: Action): Promise<Value | void>;
   /** A link out's message, for every link in of that name of the same owner's. */
   link?(name: string, message: Message): void;
@@ -112,7 +114,13 @@ type EngineOptions = {
 
 /** An action as the run log says it. */
 const actionText = (action: Action): string =>
-  action.kind === 'control' ? `${action.value} > ${action.endpoint}` : action.kind === 'event' ? `${action.type} about ${action.subject}` : action.line;
+  action.kind === 'control'
+    ? `${action.value} > ${action.endpoint}`
+    : action.kind === 'event'
+    ? `${action.type} about ${action.subject}`
+    : action.kind === 'script'
+    ? `scripts/${action.script}`
+    : action.line;
 
 /** The most nodes a message passes: past it, a message goes round, through links, and is dropped. */
 const MAX_HOPS = 64;
@@ -155,7 +163,7 @@ const inWindow = (local: LocalTime, from: number, to: number, days?: number[]): 
  * devices whose coming and going it follows, the folders its file nodes watch, the events it hears
  * (patterns) and those it raises.
  */
-type Reads = { endpoints: string[]; controls: string[]; devices: string[]; folders: string[]; events: string[]; raises: string[] };
+type Reads = { endpoints: string[]; controls: string[]; devices: string[]; folders: string[]; events: string[]; raises: string[]; scripts: string[] };
 
 export const readsOf = (automation: Automation): Reads => {
   const of = (type: string, key: string) => [...new Set([...automation.nodes.values()].filter((node) => node.type === type).map((node) => node.config[key] as string))];
@@ -166,6 +174,7 @@ export const readsOf = (automation: Automation): Reads => {
     folders: of('file', 'folder'),
     events: of('event-in', 'event'),
     raises: of('event-out', 'event'),
+    scripts: of('script', 'script'),
   };
 };
 
@@ -651,12 +660,23 @@ export class AutomationEngine {
       }
       case 'control':
         return this.control(node, state, message);
-      case 'shell': {
+      case 'shell':
+      case 'script': {
         if (this.quiet) return;
-        const env = { VALUE: valueText(value) ?? '', TOPIC: message.topic };
+        const env: Record<string, string> = { VALUE: valueText(value) ?? '', TOPIC: message.topic };
+        for (const id of this.automation.senders.get(node.id) ?? []) {
+          if (state.inputs.has(id)) env[nameOfSender(id)] = valueText(state.inputs.get(id)!) ?? '';
+        }
         const timeoutMs = (config.timeout as number | undefined) ?? SHELL_TIMEOUT_MS;
-        this.enqueue(node, { kind: 'shell', line: config.run as string, env, timeoutMs }, (result) => {
-          this.send(node, { ...message, at: this.options.now() }, typeof result === 'string' ? valueOfText(result) : result ?? null);
+        const action: Action = node.type === 'script'
+          ? { kind: 'script', script: config.script as string, env, timeoutMs }
+          : { kind: 'shell', line: config.run as string, env, timeoutMs };
+        this.enqueue(node, action, (result) => {
+          const sent = { ...message, at: this.options.now() };
+          if (typeof result !== 'string') return this.send(node, sent, result ?? null);
+          const { sends, rest } = printedOutputs(result, (config.outputs as string[] | undefined) ?? []);
+          for (const [output, each] of sends) this.send(node, sent, each, output);
+          this.send(node, sent, rest);
         });
         return;
       }

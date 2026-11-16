@@ -23,11 +23,13 @@ import { parseDuration } from '../time.ts';
 const MAX_NODES = 200;
 
 const ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+/** A script's file name under the automation's `scripts/`. */
+const SCRIPT_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
 const DAY_NAMES = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
 const FULL_DAY_NAMES = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 
 /** A setting as the engine reads it. */
-type Setting = Value | number[] | Expression | { name: string; test: Test }[] | TimeOfDay | Record<string, string>;
+type Setting = Value | number[] | string[] | Expression | { name: string; test: Test }[] | TimeOfDay | Record<string, string>;
 
 const EVENT_WORD = /^[A-Za-z0-9_-]+$/;
 
@@ -68,7 +70,7 @@ export type Node = {
   config: Record<string, Setting | undefined>;
   /** The nodes each output sends to. */
   wires: Record<string, string[]>;
-  /** The outputs it has: its kind's, and a switch's cases. */
+  /** The outputs it has: its kind's, a switch's cases, and the names a shell or script declares. */
   outputs: string[];
 };
 
@@ -88,6 +90,16 @@ const isScalar = (value: unknown): value is Value => value === null || ['string'
 
 /** A name an expression reads a sender's value by: its id with dashes as underscores. */
 export const nameOfSender = (id: string): string => id.replaceAll('-', '_');
+
+/**
+ * Why a node wired into a shell or script cannot be given as the variable `name`: a name must begin
+ * with a letter, and one in capitals is the environment's, as `PATH` and `$VALUE` are.
+ */
+const variableProblem = (name: string): string | undefined => {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) return `$${name} is no variable's name: name it beginning with a letter`;
+  if (/^[A-Z0-9_]+$/.test(name)) return `$${name} would be the environment's, as PATH is: name it with small letters`;
+  return undefined;
+};
 
 /** `07:30` as minutes since midnight; `sunset-30m` as the event and its offset. */
 const parseTime = (value: unknown): TimeOfDay => {
@@ -167,6 +179,19 @@ const readSetting = (spec: SettingSpec, value: unknown): Setting => {
       return value;
     case 'event':
       return parseEvent(value, true);
+    case 'script':
+      if (typeof value !== 'string' || !SCRIPT_NAME.test(value)) {
+        throw new Error(`takes the name of one of the automation's scripts, such as check.sh, not ${JSON.stringify(value)}`);
+      }
+      return value;
+    case 'names': {
+      const names = typeof value === 'string' ? value.split(/[\s,]+/).filter(Boolean) : Array.isArray(value) ? value : [];
+      if (!names.length || names.some((name) => typeof name !== 'string' || !ID.test(name))) {
+        throw new Error(`takes names such as [heat, note], each letters, digits, - and _, not ${JSON.stringify(value)}`);
+      }
+      if (names.includes('out')) throw new Error('names out, which every such node has: it sends what else was printed');
+      return [...new Set(names as string[])];
+    }
     case 'duration': {
       const ms = typeof value === 'string' ? parseDuration(value) : undefined;
       if (ms === undefined || ms <= 0) throw new Error(`takes a duration such as 30s, 5m or 1h, not ${JSON.stringify(value)}`);
@@ -271,7 +296,11 @@ const readNode = (id: string, raw: unknown): Node => {
   if (raw.label !== undefined && typeof raw.label !== 'string') throw new Error('label takes text');
   const pos = raw.pos;
   if (pos !== undefined && !(Array.isArray(pos) && pos.length === 2 && pos.every((n) => typeof n === 'number' && Number.isFinite(n)))) throw new Error('pos takes [x, y]');
-  const outputs = kind.type === 'switch' ? [...(config.cases as { name: string }[]).map((each) => each.name), 'else'] : [...kind.outputs];
+  const outputs = kind.type === 'switch'
+    ? [...(config.cases as { name: string }[]).map((each) => each.name), 'else']
+    : config.outputs
+    ? [...config.outputs as string[], ...kind.outputs]
+    : [...kind.outputs];
   return {
     id,
     type: kind.type,
@@ -350,6 +379,13 @@ export const readAutomation = (raw: unknown): { automation?: Automation; problem
         else if (target === node.id) problems.push({ node: node.id, message: 'it is wired into itself' });
         else if (!senders.get(target)?.includes(node.id)) senders.set(target, [...senders.get(target) ?? [], node.id]);
       }
+    }
+  }
+  for (const node of nodes.values()) {
+    if (node.type !== 'shell' && node.type !== 'script') continue;
+    for (const sender of senders.get(node.id) ?? []) {
+      const problem = variableProblem(nameOfSender(sender));
+      if (problem) problems.push({ node: node.id, message: `${sender} is wired in, but ${problem}` });
     }
   }
   for (const node of nodes.values()) {

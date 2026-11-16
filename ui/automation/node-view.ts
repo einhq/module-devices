@@ -94,6 +94,8 @@ export const summaryOf = (node: AutomationNodeSpec): string => {
       return `${has('value') ? text(node.value) : 'the value'} → ${text(node.endpoint)}`;
     case 'shell':
       return text(node.run);
+    case 'script':
+      return text(node.script);
     default:
       return '';
   }

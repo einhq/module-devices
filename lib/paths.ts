@@ -7,6 +7,8 @@ export const AUTOMATION_GROUP = 'automation';
 
 /** People's automations, one YAML file each (`<name>.yaml`), written by members of the automation group. */
 export const AUTOMATIONS_DIR = '/etc/automations';
+/** The folder under an automation's file that holds its own scripts: `<name>.yaml/scripts/<script>`. */
+export const SCRIPTS_FOLDER = 'scripts';
 /** Modules' automations: `mod setup` links a module's `etc/automations.d` here as `<module>/`. */
 export const MODULE_AUTOMATIONS_DIR = '/etc/automations.d';
 /** Each automation's run log: its actions, errors, debug nodes and clock firings, its owner's alone. */

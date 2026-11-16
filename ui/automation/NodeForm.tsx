@@ -18,6 +18,7 @@ import {
   Stack,
   Switch,
   Table,
+  TagsInput,
   Text,
   TextInput,
   ThemeIcon,
@@ -28,6 +29,7 @@ import { type ReactNode, useEffect, useState } from 'react';
 import type { DeviceInfo, DeviceSummary, EndpointSummary } from '@ein/api';
 import type { AutomationNodeSpec, AutomationProblem } from '../../lib/api.ts';
 import { KINDS, type KindSpec, type SettingSpec } from '../../lib/automations/catalog.ts';
+import { namesOf } from './graph-edit.ts';
 
 type NodeFormProps = {
   /** The automation's name, for pressing a button node. */
@@ -38,6 +40,10 @@ type NodeFormProps = {
   node: AutomationNodeSpec;
   editable: boolean;
   problems: AutomationProblem[];
+  /** The automation's own scripts, which a script node picks from. */
+  scripts: string[];
+  /** Open one of them on the Scripts tab. */
+  onOpenScript: (script: string) => void;
   onChange: (changes: Record<string, unknown>) => void;
   /** Name the node `to`; answers why it cannot be, or undefined once it is. */
   onRename: (to: string) => string | undefined;
@@ -272,7 +278,15 @@ function LocationField(
 }
 
 function SettingField(
-  { setting, value, controls, disabled, onChange }: { setting: SettingSpec; value: unknown; controls: boolean; disabled: boolean; onChange: (value: unknown) => void },
+  { setting, value, controls, scripts, disabled, onChange, onOpenScript }: {
+    setting: SettingSpec;
+    value: unknown;
+    controls: boolean;
+    scripts: string[];
+    disabled: boolean;
+    onChange: (value: unknown) => void;
+    onOpenScript: (script: string) => void;
+  },
 ) {
   const label = setting.label;
   const required = setting.required === true;
@@ -334,6 +348,41 @@ function SettingField(
       return <LocationField setting={setting} value={value} disabled={disabled} onChange={onChange} />;
     case 'cases':
       return <CasesEditor value={value} required={required} disabled={disabled} onChange={onChange} />;
+    case 'script': {
+      const picked = shown(value);
+      return (
+        <Group gap='xs' align='flex-end' wrap='nowrap'>
+          <Select
+            label={label}
+            withAsterisk={required}
+            description={scripts.length ? setting.help : 'It has none yet: make one on the Scripts tab'}
+            data={picked && !scripts.includes(picked) ? [...scripts, picked] : scripts}
+            value={picked || null}
+            searchable
+            disabled={disabled}
+            onChange={(next) => onChange(next ?? undefined)}
+            style={{ flex: 1 }}
+          />
+          <Tooltip label={picked ? `Open ${picked} on the Scripts tab` : 'The Scripts tab'}>
+            <ActionIcon variant='default' size={36} onClick={() => onOpenScript(picked)} aria-label='Open the script'>
+              <TablerIcon name='script' size={18} />
+            </ActionIcon>
+          </Tooltip>
+        </Group>
+      );
+    }
+    case 'names':
+      return (
+        <TagsInput
+          label={label}
+          withAsterisk={required}
+          description={setting.help}
+          value={namesOf(value)}
+          disabled={disabled}
+          splitChars={[',', ' ']}
+          onChange={(next) => onChange(next.length ? next : undefined)}
+        />
+      );
     case 'value':
       return (
         <TextInput
@@ -460,6 +509,8 @@ function KindDocs({ kind }: { kind: KindSpec }) {
     ? [['out', `true or false, ${changes}`], ['true', `true, ${changes}`], ['false', `false, ${changes}`]]
     : kind.type === 'switch'
     ? [['a case', 'the value, when that case is the first it passes'], ['else', 'the value, when it passes none']]
+    : kind.settings.some((setting) => setting.type === 'names')
+    ? [['an output', 'the value of each line name=value it prints, for an output Outputs names'], ['out', 'what else it printed, once it is done']]
     : kind.outputs.map((output) => [output, 'what it sends, as above']);
   return (
     <Box style={{ borderTop: '1px solid var(--mantine-color-default-border)' }} pt='xs'>
@@ -516,7 +567,7 @@ function KindDocs({ kind }: { kind: KindSpec }) {
 }
 
 /** A node's settings, as its kind in the catalog has them, each change made at once, and its docs below them. */
-export function NodeForm({ automation, running, id, node, editable, problems, onChange, onRename, onRemove, onClose }: NodeFormProps) {
+export function NodeForm({ automation, running, id, node, editable, problems, scripts, onOpenScript, onChange, onRename, onRemove, onClose }: NodeFormProps) {
   const kind = KINDS[node.type];
   const color = kind?.color ?? 'gray';
   return (
@@ -557,8 +608,10 @@ export function NodeForm({ automation, running, id, node, editable, problems, on
           setting={setting}
           value={node[setting.name]}
           controls={node.type === 'control'}
+          scripts={scripts}
           disabled={!editable}
           onChange={(value) => onChange({ [setting.name]: value })}
+          onOpenScript={onOpenScript}
         />
       ))}
       {node.type === 'button' && <PressButton automation={automation} id={id} running={running} />}

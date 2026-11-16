@@ -5,7 +5,7 @@ import { execCommand, notify } from '@ein/ui/signals';
 import { ActionIcon, Badge, Box, Button, Drawer, Group, Loader, Menu, Paper, Popover, ScrollArea, Stack, Switch, Text, Tooltip, UnstyledButton } from '@mantine/core';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import type { AutomationDetail, AutomationNodeStatus, AutomationProblem, AutomationRunStatus, AutomationSetAnswer, AutomationSpec } from '../../lib/api.ts';
+import type { AutomationDetail, AutomationNodeStatus, AutomationProblem, AutomationRunStatus, AutomationSetAnswer, AutomationSpec, AutomationSummary } from '../../lib/api.ts';
 import { KINDS } from '../../lib/automations/catalog.ts';
 import { readAutomation } from '../../lib/automations/graph.ts';
 import { Canvas, type Selection, useDeleteKey } from './Canvas.tsx';
@@ -13,9 +13,10 @@ import { addNode, disconnect, nameProblem, removeNode, renameNode, setSettings }
 import { NodeForm } from './NodeForm.tsx';
 import { GROUPS, NodeKinds } from './NodeKinds.tsx';
 import type { Simulation } from './simulation.ts';
+import { Scripts } from './Scripts.tsx';
 import { Simulator, startSimulation } from './Simulator.tsx';
 
-export type AutomationTab = 'graph' | 'yaml' | 'runs';
+export type AutomationTab = 'graph' | 'yaml' | 'scripts' | 'runs';
 
 /** How often a running automation's nodes are asked what they did, while its graph is open. */
 const STATUS_MS = 3000;
@@ -196,16 +197,23 @@ function SaveState({ saving, error, phone, onRetry, onReload }: { saving: boolea
 }
 
 /**
- * One automation, filling what is below the page's bar: its graph to draw and wire, its YAML, or
- * what it did, as `tab` says. Its problems, its switch and whether it is saved stand in the bar, in
+ * One automation, filling what is below the page's bar: its graph to draw and wire, its YAML, its
+ * own scripts, or what it did, as `tab` says. Its problems, its switch and whether it is saved stand in the bar, in
  * `controls`; the leftmost `inset` px are under the page's list. The graph and the YAML are the same
  * file, and every change saves itself a moment after the last one: the graph as YAML in the editor's
  * order, as a draft while it has problems, the YAML as typed once it is YAML at all. A change not yet
  * saved is saved at once when the tab changes or the automation is left.
  */
-export function AutomationEditor({ name, tab, controls, inset, onChanged }: {
+export function AutomationEditor({ name, tab, onTab, summary, controls, inset, onChanged }: {
   name: string;
   tab: AutomationTab;
+  /** Go to another tab: a script node opens its script on the Scripts tab. */
+  onTab: (tab: AutomationTab) => void;
+  /**
+   * It as the page's list last read it: when the engine has come to run it or hold it back since
+   * (its scripts changed, its owner's rights), it is read again.
+   */
+  summary?: AutomationSummary;
   controls: HTMLElement | null;
   inset: number;
   onChanged: () => void;
@@ -224,6 +232,8 @@ export function AutomationEditor({ name, tab, controls, inset, onChanged }: {
   /** A save is on its way; one asked for meanwhile waits for it. */
   const inFlight = useRef<Promise<void> | null>(null);
   const [status, setStatus] = useState<Record<string, AutomationNodeStatus> | undefined>();
+  /** The script open on the Scripts tab. */
+  const [script, setScript] = useState<string | null>(null);
   const place = useRef<(() => [number, number]) | null>(null);
 
   const load = async () => {
@@ -242,8 +252,16 @@ export function AutomationEditor({ name, tab, controls, inset, onChanged }: {
   useEffect(() => {
     setDetail(null);
     setSelection(null);
+    setScript(null);
     void load();
   }, [name]);
+
+  // The engine's view changed outside this editor: read it again, unless a change waits to be saved.
+  const engineSays = summary && JSON.stringify([summary.running, summary.problems]);
+  useEffect(() => {
+    if (!detail || !engineSays || dirty || engineSays === JSON.stringify([detail.running, detail.problems])) return;
+    execCommand<AutomationDetail>(`automation-show ${shq(name)}`).then((next) => !dirty && setDetail(next)).catch(() => {});
+  }, [engineSays]);
 
   const editable = Boolean(detail?.writable && !detail.module);
   const read = useMemo(() => readAutomation(spec), [spec]);
@@ -411,6 +429,11 @@ export function AutomationEditor({ name, tab, controls, inset, onChanged }: {
       node={selectedNode}
       editable={editable}
       problems={problems.filter((problem) => problem.node === selection.id)}
+      scripts={detail.scripts}
+      onOpenScript={(picked) => {
+        setScript(picked || null);
+        onTab('scripts');
+      }}
       onChange={(changes) => change(setSettings(spec, selection.id, changes))}
       onRename={(to) => {
         const problem = nameProblem(spec, to);
@@ -574,6 +597,22 @@ export function AutomationEditor({ name, tab, controls, inset, onChanged }: {
             />
           )}
         </Box>
+      )}
+      {tab === 'scripts' && (
+        detail.module ? <EmptyState title='No scripts of its own'>A module's automation runs the module's commands from shell nodes.</EmptyState> : (
+          <Scripts
+            path={detail.path}
+            scripts={detail.scripts}
+            editable={editable}
+            picked={script}
+            inset={inset}
+            onPick={setScript}
+            onListChanged={async () => {
+              setDetail(await execCommand<AutomationDetail>(`automation-show ${shq(name)}`));
+              onChanged();
+            }}
+          />
+        )
       )}
       {tab === 'runs' && (
         <Box h='100%' pl={inset}>

@@ -1,11 +1,11 @@
 /**
  * The ONVIF client against a stub camera, and what the driver reads of its answers: a request is
  * signed with the camera's clock, a wrong password is said as such, a reference parameter goes back
- * with its namespace, and a camera's events are motion or a person seen, on or off.
+ * with its namespace, and a camera's events are sorted into kinds by their topic.
  */
 
 import { assertEquals, assertRejects } from '@std/assert';
-import { eventKind, eventState } from '../lib/cameras/onvif-driver.ts';
+import { eventKind, eventState, eventValue } from '../lib/cameras/onvif-driver.ts';
 import { createOnvif, deviceServiceUrl, OnvifFault } from '../lib/cameras/onvif.ts';
 import { find, parseXml, writeXml } from '../lib/cameras/xml.ts';
 import { startOnvifCamera } from './onvif-camera.ts';
@@ -39,18 +39,24 @@ Deno.test('XML is read by local names, and an element written back keeps its nam
   assertEquals(writeXml(find(ref, 'Id')!), '<b:Id xmlns:b="urn:b">7 &amp; 8</b:Id>');
 });
 
-Deno.test("a camera's events are motion or a person seen, on or off", () => {
+Deno.test("a camera's events are sorted by their topic, and are a state or, for a line crossed, an event", () => {
   assertEquals(
     [
       'RuleEngine/CellMotionDetector/Motion',
       'VideoSource/MotionAlarm',
       'RuleEngine/PeopleDetector/People',
       'RuleEngine/MyRuleDetector/HumanDetect',
+      'RuleEngine/MyRuleDetector/VehicleDetect',
+      'RuleEngine/MyRuleDetector/DogCatDetect',
+      'RuleEngine/TamperDetector/Tamper',
+      'VideoSource/GlobalSceneChange/ImagingService',
+      'AudioAnalytics/Audio/DetectedSound',
+      'RuleEngine/LineDetector/Crossed',
+      'RuleEngine/FieldDetector/ObjectsInside',
+      'Device/HardwareFailure/StorageFailure',
       'Device/Trigger/DigitalInput',
-    ].map(
-      eventKind,
-    ),
-    ['motion', 'motion', 'person', 'person', undefined],
+    ].map((topic) => eventKind(topic)?.kind),
+    ['motion', 'motion', 'person', 'person', 'vehicle', 'animal', 'tamper', 'tamper', 'sound', 'line-crossing', 'intrusion', 'storage-failure', undefined],
   );
   assertEquals(
     ([{ IsMotion: 'true' }, { State: 'false' }, { Rule: 'MyRule', IsPeople: '1' }, { Region: 'A' }] as Record<string, string>[]).map((data) =>
@@ -58,4 +64,10 @@ Deno.test("a camera's events are motion or a person seen, on or off", () => {
     ),
     [true, false, true, undefined],
   );
+  const crossed = eventKind('RuleEngine/LineDetector/Crossed')!;
+  assertEquals(
+    ([{ ObjectId: '0' }, { ObjectId: '1' }, {}, { State: 'false' }] as Record<string, string>[]).map((data) => eventValue(crossed, { topic: '', data })),
+    ['crossed', 'crossed', 'crossed', undefined],
+  );
+  assertEquals(eventValue(eventKind('Device/HardwareFailure/StorageFailure')!, { topic: '', data: { Failed: 'true' } }), true);
 });

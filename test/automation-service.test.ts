@@ -3,7 +3,9 @@
  * automation a member of the automation group writes runs on a press, as her and no more than she
  * may; it switches a plug by writing its control and runs a line with the value it was sent, never
  * as part of the line; an automation whose owner may not read what it reads, or that others may
- * change, is held back and says why; a file coming into a folder is sent once written, and only
+ * change, is held back and says why; its own script, a child of its file, runs as its owner and
+ * sends its lines on its outputs, and is not run while others may change it; a file coming into a
+ * folder is sent once written, and only
  * one its owner may read; a timer runs on over a restart of the service and a move of its node; a
  * module's automation runs and only the administrator turns it off; an event reaches an automation
  * only when its owner may read the node it is about, and only the administrator's raise one; and
@@ -48,6 +50,18 @@ const TIMER = (x: number) =>
   done: {type: shell, run: 'echo done > /home/anna/timer.txt'}
 `;
 
+const HEAT = `nodes:
+  go: {type: button, value: 21, to: [check]}
+  check: {type: script, script: check.sh, outputs: [heat, who], to: {heat: [heat-note], who: [who-note]}}
+  heat-note: {type: shell, run: 'echo "$VALUE" > /home/anna/heat.txt'}
+  who-note: {type: shell, run: 'echo "$VALUE" > /home/anna/who.txt'}
+`;
+
+/** Its own script, made as the editor makes one, and given its lines. */
+const CHECK_SH = (lines: string[]) =>
+  'mkdir -p -m 755 /etc/automations/heat.yaml/scripts && mknode -t file --tier db -m 755 --as name=check.sh --as mimetype=text/x-shellscript --an size=0 /etc/automations/heat.yaml/scripts/check.sh && printf "%s\\n" ' +
+  lines.map(quoted).join(' ') + ' > /etc/automations/heat.yaml/scripts/check.sh';
+
 const NASTY = `nodes:
   go: {type: button, to: [word]}
   word: {type: set, value: "a'; echo pwned > /home/anna/pwned.txt; echo '", to: [note]}
@@ -89,7 +103,7 @@ Deno.test({ name: 'automation engine', sanitizeResources: false, sanitizeOps: fa
       const made = await anna.execJson<AutomationSetAnswer>('automation-new porch --from button-toggle');
       assertEquals([made.created, made.path], [true, '/etc/automations/porch.yaml']);
       const stat = await admin.execJson<{ props: { uid: number; mode: number; tier?: string } }>('stat /etc/automations/porch.yaml');
-      assertEquals([stat.props.mode & 0o777, stat.props.tier], [0o644, 'db']);
+      assertEquals([stat.props.mode & 0o777, stat.props.tier], [0o755, 'db']);
       assertEquals((await anna.exec('automation-new porch')).success, false);
     });
 
@@ -234,6 +248,30 @@ Deno.test({ name: 'automation engine', sanitizeResources: false, sanitizeOps: fa
       );
       for (const name of ['shared', 'listed']) assert(list.find((each) => each.name === name)!.problems[0].message.startsWith('others than its owner may change it'));
     });
+
+    await t.step(
+      'its own script, a child of its file, runs as its owner with what is wired in, and its lines go on its outputs; one others may change is not run',
+      async () => {
+        const problem = (name: string) =>
+          until(`${name} held back`, () => anna.execJson<AutomationSummary[]>('automations'), (list) => (list.find((each) => each.name === name)?.problems.length ?? 0) > 0)
+            .then((list) => list.find((each) => each.name === name)!.problems[0].message);
+        await anna.execString(`automation-set heat --yaml ${quoted(HEAT)}`);
+        assertEquals(await problem('heat'), 'it has no script check.sh');
+        await anna.execString(CHECK_SH(['#!bash', 'echo "heat=$go"', 'echo "who=$(user-whoami)"', 'echo done']));
+        await running('heat');
+        assertEquals((await anna.execJson<AutomationDetail>('automation-show heat')).scripts, ['check.sh']);
+        await anna.execString('automation-trigger heat go');
+        assertEquals((await until('heat.txt', () => admin.execString('cat /home/anna/heat.txt'), (text) => text.trim() !== '')).trim(), '21');
+        assertEquals((await until('who.txt', () => admin.execString('cat /home/anna/who.txt'), (text) => text.trim() !== '')).trim(), 'anna');
+        assertEquals((await anna.execJson<AutomationRunStatus>('automation-status heat')).nodes.check.value, 'done');
+
+        await anna.execString('chmod 775 /etc/automations/heat.yaml/scripts/check.sh');
+        assert((await problem('heat')).startsWith('others than its owner may change the script check.sh'));
+        await anna.execString('chmod 755 /etc/automations/heat.yaml/scripts/check.sh');
+        await running('heat');
+        assertEquals((await bo.exec('printf x > /etc/automations/heat.yaml/scripts/check.sh')).success, false, "the script is anna's alone to change");
+      },
+    );
 
     await t.step('automation-check says what each node would say now, as the caller reads it', async () => {
       const check = await anna.execJson<AutomationCheck>('automation-check porch');

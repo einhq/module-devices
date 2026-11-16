@@ -3,8 +3,9 @@
  * `onvif` driver asks them. Every request but the clock must carry a UsernameToken whose digest
  * matches `password` and whose time is within a minute of the camera's clock, which runs
  * `clockOffsetMs` off ours. It has two profiles, a 2560×1440 H.265 main and a 640×360 H.264 sub,
- * pans, tilts and zooms on the main one, and has two presets. Events put in `events` are what its
- * PullPoint gives next; what was asked of its PTZ is in `ptz`.
+ * pans, tilts and zooms on the main one, and has two presets. It lists motion, people, tampering,
+ * a line crossed and its storage failing among its events; events put in `events` are what its
+ * PullPoint gives next. What was asked of its PTZ is in `ptz`.
  */
 
 import { passwordDigest } from '../lib/cameras/onvif.ts';
@@ -105,7 +106,9 @@ export const startOnvifCamera = (options: { user: string; password: string; stre
           return envelope(
             `<tev:GetEventPropertiesResponse xmlns:tev="http://www.onvif.org/ver10/events/wsdl"><wstop:TopicSet>` +
               `<tns1:RuleEngine><CellMotionDetector><Motion wstop:topic="true"><tt:MessageDescription IsProperty="true"/></Motion></CellMotionDetector>` +
-              `<PeopleDetector><People wstop:topic="true"/></PeopleDetector></tns1:RuleEngine></wstop:TopicSet></tev:GetEventPropertiesResponse>`,
+              `<PeopleDetector><People wstop:topic="true"/></PeopleDetector><TamperDetector><Tamper wstop:topic="true"/></TamperDetector>` +
+              `<LineDetector><Crossed wstop:topic="true"/></LineDetector></tns1:RuleEngine>` +
+              `<tns1:Device><HardwareFailure><StorageFailure wstop:topic="true"/></HardwareFailure></tns1:Device></wstop:TopicSet></tev:GetEventPropertiesResponse>`,
           );
         case 'CreatePullPointSubscription':
           subscriptions++;

@@ -4,7 +4,10 @@
  *
  * A person's file anyone but its owner may write, by its mode or its access list, is not run:
  * whoever could change it would act as the owner. That is the rule sshd keeps for a key file, and
- * `chmod 644` is the way out.
+ * `chmod 755` is the way out.
+ *
+ * A person's automation keeps its own scripts as children of its file, `<name>.yaml/scripts/<script>`,
+ * under the same rule: run as the owner, and only while no one else may change them.
  *
  * Whether one is on: a person's file's `enabled` attr, else its YAML's `enabled`. A module's file is
  * the module's and is replaced with it, so the administrator's choice for it is kept in the
@@ -18,7 +21,7 @@ import { parse } from '@std/yaml';
 import type { AutomationProblem, AutomationSpec, AutomationValue } from './api.ts';
 import type { LocalTime } from './automations/engine.ts';
 import { type Automation, readAutomation } from './automations/graph.ts';
-import { AUTOMATIONS_DIR, MODULE_AUTOMATIONS_DIR, MODULE_RUN_LOGS_DIR, MODULE_STATE_DIR, RUN_LOGS_DIR, STATE_DIR } from './paths.ts';
+import { AUTOMATIONS_DIR, MODULE_AUTOMATIONS_DIR, MODULE_RUN_LOGS_DIR, MODULE_STATE_DIR, RUN_LOGS_DIR, SCRIPTS_FOLDER, STATE_DIR } from './paths.ts';
 import { localTimeIn } from './time.ts';
 
 export type AutomationFile = {
@@ -58,6 +61,9 @@ export const automationName = (path: string): string | undefined => {
   return undefined;
 };
 
+/** The folder of an automation's own scripts, a child of its file. */
+export const scriptsPath = (name: string): string => `${automationPath(name)}/${SCRIPTS_FOLDER}`;
+
 /** An automation's run log, and where its deadlines are kept over a restart. */
 export const runLogPath = (name: string): string => name.includes('/') ? `${MODULE_RUN_LOGS_DIR}/${name}` : `${RUN_LOGS_DIR}/${name}`;
 export const statePath = (name: string): string => name.includes('/') ? `${MODULE_STATE_DIR}/${name}.json` : `${STATE_DIR}/${name}.json`;
@@ -72,6 +78,34 @@ const othersMayWrite = (props: NodeProps): boolean => {
   });
 };
 
+/** Whether anyone but `owner` may change a node: its owner being another, or its mode or access list. */
+const othersMayChange = (props: NodeProps, owner: number): boolean => (props.uid !== owner && props.uid !== ADMIN_ACCESS.uid) || othersMayWrite(props);
+
+/**
+ * Why the automation `name` may not run its script `script` as its owner, `access`: there is none, the
+ * owner may not reach, read and run it, or anyone else may change it or its folder.
+ */
+export const scriptProblem = async (vfs: NodeVFS, access: Access, name: string, script: string): Promise<string | undefined> => {
+  const folder = scriptsPath(name);
+  const [dir, node] = await Promise.all([
+    vfs.get(ADMIN_ACCESS, folder).catch(() => undefined),
+    vfs.get(ADMIN_ACCESS, `${folder}/${script}`).catch(() => undefined),
+  ]);
+  if (!dir || !node || node.type !== 'file') return `it has no script ${script}`;
+  const reached = await vfs.get(access, `${folder}/${script}`).catch(() => undefined);
+  if (!reached || !verifyAccess(access, node.props, 'r') || !verifyAccess(access, node.props, 'x')) {
+    return `its owner may not run the script ${script}: chmod 755 it, its folder and the automation's file`;
+  }
+  if (othersMayChange(dir.props, access.uid) || othersMayChange(node.props, access.uid)) {
+    return `others than its owner may change the script ${script}, so it is not run (chmod 755 it and its folder, both the owner's, and no one else on their access lists may write)`;
+  }
+  return undefined;
+};
+
+/** The names of an automation's own scripts, read as `access`. */
+export const scriptNames = async (vfs: NodeVFS, access: Access, name: string): Promise<string[]> =>
+  (await vfs.children(access, scriptsPath(name)).catch(() => [])).filter((child) => child.node.type === 'file').map((child) => child.name).sort();
+
 export const readText = async (vfs: NodeVFS, access: Access, path: string): Promise<string> => {
   const handle = await vfs.open(access, path, { mode: 'r' });
   try {
@@ -83,8 +117,11 @@ export const readText = async (vfs: NodeVFS, access: Access, path: string): Prom
 
 const encoder = new TextEncoder();
 
-/** Write `text` at `path`: a new file on the db tier, its owner's alone to change; an old one in place. */
-export const writeText = async (vfs: NodeVFS, access: Access, path: string, text: string, mode = 0o644): Promise<boolean> => {
+/**
+ * Write `text` at `path`: a new file on the db tier, its owner's alone to change and open to pass
+ * through, so its scripts can be children of it; an old one in place, its children kept.
+ */
+export const writeText = async (vfs: NodeVFS, access: Access, path: string, text: string, mode = 0o755): Promise<boolean> => {
   const created = !(await vfs.exists(access, path));
   const bytes = encoder.encode(text);
   if (created) {
@@ -130,7 +167,7 @@ export const readAutomationFile = async (vfs: NodeVFS, access: Access, path: str
   const text = await readText(vfs, access, path);
   const { spec, automation, problems } = parseAutomationText(text);
   if (!module && othersMayWrite(node.props)) {
-    problems.unshift({ message: 'others than its owner may change it, so it is not run (chmod 644, and no one else on its access list may write)' });
+    problems.unshift({ message: 'others than its owner may change it, so it is not run (chmod 755, and no one else on its access list may write)' });
   }
   const own = module ? switches[name] : node.attrs.enabled;
   return {

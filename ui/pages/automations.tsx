@@ -244,13 +244,25 @@ export default function AutomationsPage() {
             <Tabs.List>
               <Tabs.Tab value='graph' leftSection={<TablerIcon name='topology-star-3' size={16} />}>Graph</Tabs.Tab>
               <Tabs.Tab value='yaml' leftSection={<TablerIcon name='file-code' size={16} />}>YAML</Tabs.Tab>
+              <Tabs.Tab value='scripts' leftSection={<TablerIcon name='script' size={16} />}>Scripts</Tabs.Tab>
               <Tabs.Tab value='runs' leftSection={<TablerIcon name='list-details' size={16} />}>Runs</Tabs.Tab>
             </Tabs.List>
           )}
         />
         <Box style={{ position: 'relative', flex: 1, minHeight: 0 }}>
           {name
-            ? <AutomationEditor key={name} name={name} tab={tab} controls={controls} inset={!phone && listOpen ? DRAWER_WIDTH : 0} onChanged={() => void refetch()} />
+            ? (
+              <AutomationEditor
+                key={name}
+                name={name}
+                tab={tab}
+                onTab={setTab}
+                summary={list.find((each) => each.name === name)}
+                controls={controls}
+                inset={!phone && listOpen ? DRAWER_WIDTH : 0}
+                onChanged={() => void refetch()}
+              />
+            )
             : (
               <Box h='100%' pl={!phone && listOpen ? DRAWER_WIDTH : 0}>
                 <EmptyState

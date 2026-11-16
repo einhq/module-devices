@@ -37,13 +37,21 @@ const withWires = (node: AutomationNodeSpec, wires: Record<string, string[]>): A
   return to ? { ...rest, to } : rest;
 };
 
-/** The outputs a node sends on: its kind's, and a switch's cases before `else`. */
+/** The outputs a node sends on: its kind's, a switch's cases before `else`, a shell's or script's own before `out`. */
 export const outputsOf = (node: AutomationNodeSpec): string[] => {
   const kind = KINDS[node.type];
   if (!kind) return ['out'];
   if (kind.type === 'switch') return [...(isMapping(node.cases) ? Object.keys(node.cases) : []), 'else'];
+  if (kind.settings.some((setting) => setting.type === 'names')) return [...namesOf(node.outputs).filter((name) => name !== 'out'), ...kind.outputs];
   return [...kind.outputs];
 };
+
+/** A names setting as the YAML may give it: a list, or words separated by commas or spaces. */
+export const namesOf = (
+  value: unknown,
+): string[] => [
+  ...new Set(Array.isArray(value) ? value.filter((name): name is string => typeof name === 'string') : typeof value === 'string' ? value.split(/[\s,]+/).filter(Boolean) : []),
+];
 
 /** Whether wires may come into a node. */
 export const takesInput = (node: AutomationNodeSpec | undefined): boolean => node !== undefined && (KINDS[node.type]?.input ?? true);

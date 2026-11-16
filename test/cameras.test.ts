@@ -5,7 +5,7 @@
  * come through core, a stream the restreamer lost is given back when it is asked for, and forgetting
  * the camera takes its streams from the restreamer; `automation-status --streams` says whether the
  * restreamer answers EiN's account. The onvif driver, against a stub camera: its
- * profiles become the streams, its motion and people seen are logged, and its presets and moves are
+ * profiles become the streams, its events are logged, and its presets and moves are
  * controls.
  */
 
@@ -186,6 +186,22 @@ Deno.test({ name: 'onvif cameras give their profiles, events and turns', sanitiz
       assertEquals([endpoint(info, 'motion')?.deviceClass, endpoint(info, 'person')?.label], ['motion', 'Person']);
       camera.events.push({ topic: 'tns1:RuleEngine/CellMotionDetector/Motion', name: 'IsMotion', value: 'false' });
       await until('motion over', show, (info) => endpoint(info, 'motion')?.last?.value === false);
+    });
+
+    await t.step('tampering, a line crossed and the memory card failing are logged as the camera lists them', async () => {
+      const listed = await until('their endpoints', show, (info) => ['tamper', 'line-crossing', 'storage-failure'].every((name) => !!endpoint(info, name)));
+      assertEquals(endpoint(listed, 'sound'), undefined);
+      camera.events.push({ topic: 'tns1:RuleEngine/TamperDetector/Tamper', name: 'IsTamper', value: 'true' });
+      camera.events.push({ topic: 'tns1:RuleEngine/LineDetector/Crossed', name: 'ObjectId', value: '0' });
+      camera.events.push({ topic: 'tns1:Device/HardwareFailure/StorageFailure', name: 'Failed', value: 'true' });
+      const info = await until(
+        'the events',
+        show,
+        (info) =>
+          endpoint(info, 'tamper')?.last?.value === true && endpoint(info, 'line-crossing')?.last?.value === 'crossed' &&
+          endpoint(info, 'storage-failure')?.last?.value === true,
+      );
+      assertEquals([endpoint(info, 'line-crossing')?.events, endpoint(info, 'storage-failure')?.category], [true, 'diagnostic']);
     });
 
     await t.step('a preset and a move are sent to the camera', async () => {

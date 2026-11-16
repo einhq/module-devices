@@ -9,10 +9,13 @@
  * profiles and their addresses are asked again every hour, and each minute while it is offline.
  *
  * Its events come by a PullPoint, asked for what it has, each request waiting up to ten seconds for
- * something to come, and renewed while it is asked:
- * motion (`motion`, on and off) and, where the camera tells people from the rest, a person seen
- * (`person`). A PullPoint the camera dropped is made again, and the camera says each state anew when
- * it is.
+ * something to come, and renewed while it is asked. Each kind the camera lists becomes a log, on and
+ * off: motion (`motion`), a person, a vehicle or an animal seen (`person`, `vehicle`, `animal`), the
+ * camera covered, turned or its picture changed at once (`tamper`), a sound over its level (`sound`),
+ * something inside a field drawn on its picture (`intrusion`) and its memory card failing
+ * (`storage-failure`); and a line drawn on its picture crossed is a log of events (`line-crossing`),
+ * one `crossed` each time. A PullPoint the camera dropped is made again, and the camera says each
+ * state anew when it is.
  *
  * Where its main profile turns the camera, it has controls: `ptz-preset`, one of the camera's
  * presets, and a momentary control for each way it turns, `ptz-left`, `ptz-right`, `ptz-up`,
@@ -22,7 +25,7 @@
  * the address the network listener last heard it at.
  */
 
-import type { DeviceAttrs } from '@ein/api';
+import type { DeviceAttrs, EndpointAttrs } from '@ein/api';
 import { ADMIN_ACCESS } from '@ein/client';
 import { type CameraKind, type CameraOptions, type CameraStream, message, withCredentials } from './camera.ts';
 import { createOnvif, deviceServiceUrl, type Onvif, type OnvifMessage, type OnvifProfile, type OnvifSubscription } from './onvif.ts';
@@ -52,8 +55,26 @@ const MOVES = {
 
 const PRESET = 'ptz-preset';
 
-/** What a camera's event is about: a topic about people is `person`, one about motion `motion`. */
-export const eventKind = (topic: string): 'motion' | 'person' | undefined => /people|person|human/i.test(topic) ? 'person' : /motion/i.test(topic) ? 'motion' : undefined;
+/**
+ * The kinds of event a camera says, each with the topics it is said under and its log. The first
+ * that matches is the kind, so motion, the broadest, comes last.
+ */
+const EVENT_KINDS = [
+  { kind: 'tamper', topic: /tamper|GlobalSceneChange/i, attrs: { label: 'Tampering', deviceClass: 'tamper' } },
+  { kind: 'line-crossing', topic: /LineDetector|LineCross/i, attrs: { label: 'Line crossed', events: true } },
+  { kind: 'intrusion', topic: /FieldDetector|intrusion/i, attrs: { label: 'Intrusion', deviceClass: 'occupancy' } },
+  { kind: 'sound', topic: /sound|AudioAlarm|AudioSource\/TriggerLevel/i, attrs: { label: 'Sound', deviceClass: 'sound' } },
+  { kind: 'storage-failure', topic: /StorageFailure/i, attrs: { label: 'Memory card failure', deviceClass: 'problem', category: 'diagnostic' } },
+  { kind: 'person', topic: /people|person|human/i, attrs: { label: 'Person', deviceClass: 'occupancy' } },
+  { kind: 'vehicle', topic: /vehicle/i, attrs: { label: 'Vehicle', deviceClass: 'occupancy' } },
+  { kind: 'animal', topic: /animal|DogCat/i, attrs: { label: 'Animal', deviceClass: 'occupancy' } },
+  { kind: 'motion', topic: /motion/i, attrs: { label: 'Motion', deviceClass: 'motion' } },
+] as const satisfies readonly { kind: string; topic: RegExp; attrs: EndpointAttrs }[];
+
+type EventKind = (typeof EVENT_KINDS)[number];
+
+/** What a camera's event is about, by its topic; undefined for one EiN does not log. */
+export const eventKind = (topic: string): EventKind | undefined => EVENT_KINDS.find((each) => each.topic.test(topic));
 
 /** A message's state: the first of its data's items that says true or false. */
 export const eventState = (message: OnvifMessage): boolean | undefined => {
@@ -64,10 +85,13 @@ export const eventState = (message: OnvifMessage): boolean | undefined => {
   return undefined;
 };
 
-const EVENT_ENDPOINTS = {
-  motion: { label: 'Motion', deviceClass: 'motion' },
-  person: { label: 'Person', deviceClass: 'occupancy' },
-} as const;
+/**
+ * What a message appends to its kind's log: its state, or for a log of events `crossed`, unless an
+ * item says false (a camera that also says when the crossing is over). An event's data is the
+ * object's id, which may be 0 or 1, so it is not read as a state.
+ */
+export const eventValue = (kind: EventKind, message: OnvifMessage): boolean | string | undefined =>
+  'events' in kind.attrs ? (Object.values(message.data).some((value) => /^false$/i.test(value)) ? undefined : 'crossed') : eventState(message);
 
 type Camera = {
   /** What the client was made with, so a change makes a new one. */
@@ -142,8 +166,8 @@ export const onvifCamera = (options: CameraOptions): CameraKind => {
       let subscription: OnvifSubscription | undefined;
       try {
         topics ??= await camera.onvif.topics().catch(() => []);
-        for (const kind of new Set(topics.map(eventKind))) {
-          if (kind) await devices.ensureEndpoint(ADMIN_ACCESS, device, kind, 'log', EVENT_ENDPOINTS[kind]);
+        for (const each of new Set(topics.map(eventKind))) {
+          if (each) await devices.ensureEndpoint(ADMIN_ACCESS, device, each.kind, 'log', each.attrs);
         }
         subscription = await camera.onvif.subscribe(SUBSCRIPTION_S);
         let renewed = Date.now();
@@ -153,10 +177,10 @@ export const onvifCamera = (options: CameraOptions): CameraKind => {
           said = false;
           for (const each of messages) {
             const kind = eventKind(each.topic);
-            const state = eventState(each);
-            if (!kind || state === undefined) continue;
-            await devices.ensureEndpoint(ADMIN_ACCESS, device, kind, 'log', EVENT_ENDPOINTS[kind]);
-            await devices.append(ADMIN_ACCESS, device, kind, state);
+            const value = kind && eventValue(kind, each);
+            if (!kind || value === undefined) continue;
+            await devices.ensureEndpoint(ADMIN_ACCESS, device, kind.kind, 'log', kind.attrs);
+            await devices.append(ADMIN_ACCESS, device, kind.kind, value);
           }
           if (Date.now() - renewed > (SUBSCRIPTION_S * 1000) / 2) {
             await camera.onvif.renew(subscription, SUBSCRIPTION_S);
@@ -191,7 +215,8 @@ export const onvifCamera = (options: CameraOptions): CameraKind => {
 
   return {
     name: ONVIF_DRIVER,
-    description: 'A camera that speaks ONVIF: its streams, its motion and people seen, and its presets and moves where it turns',
+    description:
+      'A camera that speaks ONVIF: its streams, its events (motion, people seen, tampering, sound, a line crossed and the like), and its presets and moves where it turns',
     config: [
       { name: 'address', label: 'Address, camera or http://camera/onvif/device_service', type: 'string', required: true },
       { name: 'user', label: 'User', type: 'string' },

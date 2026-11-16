@@ -216,8 +216,12 @@ export class Simulation {
 
   /** An action, said and not done; a control's device reports the value back, as a real one would. */
   private act(node: string, action: Action): Value | void {
-    if (action.kind === 'shell') {
-      this.add(node, 'shell', `would run: ${action.line}${action.env.VALUE ? ` (VALUE=${action.env.VALUE})` : ''}`);
+    if (action.kind === 'shell' || action.kind === 'script') {
+      // The value, and those wired in that say something else: a single sender's is the value itself.
+      const given = Object.entries(action.env)
+        .filter(([name, value]) => name !== 'TOPIC' && value !== '' && (name === 'VALUE' || value !== action.env.VALUE))
+        .map(([name, value]) => `${name}=${value}`);
+      this.add(node, 'shell', `would run: ${action.kind === 'script' ? `scripts/${action.script}` : action.line}${given.length ? ` (${given.join(' ')})` : ''}`);
       this.changed();
       return '';
     }
