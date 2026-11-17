@@ -17,7 +17,8 @@ is restarted, so its driver takes it; anything else becomes a device of a driver
 itself, over the network: `ipp` for a printer (state, warnings, ink and toner), `cast` for a Google
 Cast speaker or screen and `dlna` for a DLNA renderer, a TV say (what it plays; volume, mute, play,
 pause and stop; and the recordings, videos, pictures and pages whose paths are written to its
-`show`, played or shown on it, `play.ts`), `onvif` for a camera that answers ONVIF, `snmp` for a NAS or anything
+`show`, played or shown on it, `play.ts`; `devices-nearby` makes a recording or video the same way
+for a screen near a browser, which core's `CFG_FILE_STREAMER` names, `nearby.ts`), `onvif` for a camera that answers ONVIF, `snmp` for a NAS or anything
 else that answers SNMP (uptime, load, memory, each volume's use, temperatures; the community is
 `CFG_DEVICES_SNMP_COMMUNITY`), and `network` for the rest (whether it answers, and how fast).
 `devices-snmp <host> [oid]` walks what a device's agent answers. The `rtsp` driver takes a

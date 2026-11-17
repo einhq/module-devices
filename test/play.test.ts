@@ -10,11 +10,14 @@
  * or the original as the device's setting says, one stream for a renderer or a video of no known
  * length. Pictures as their largest rendition, moved on from after their time. Any other path a
  * page, streamed live as the writer sees it, and stopped with the list. While the media service is
- * not there, only what the device plays as it is, and a page refused.
+ * not there, only what the device plays as it is, and a page refused. A screen near the browser is
+ * given a recording or video as a file or HLS of known length, on a path of EiN's own address, kept
+ * while it is renewed and let go of when it is not.
  */
 
 import { assertEquals, assertRejects, assertStringIncludes } from '@std/assert';
 import { ADMIN_ACCESS, GUEST_ACCESS, SystemTestHarness } from '@ein/testing';
+import { NearbyFiles } from '../lib/network/nearby.ts';
 import { DEFAULT_SETTINGS, type Media, mediaAddress, MediaPlayer, type Status, Unreachable, type VideoStreamRequest, type Way, type WayCommand } from '../lib/network/play.ts';
 
 const harness = new SystemTestHarness({ ssh: false });
@@ -416,6 +419,40 @@ Deno.test({ name: 'videos, pictures and pages written to a screen', sanitizeReso
       await player.play('tv', [cast], ...input('/films/sea.mov'));
       assertEquals(last(cast)[0].contentType, 'application/x-mpegurl');
       player.forget('tv');
+    });
+
+    await t.step("a screen near the browser is given a file or HLS of known length, on a path of EiN's own address, kept while it is renewed", async () => {
+      const boat = await player.nearby('/films/boat.mp4', ADMIN_ACCESS);
+      assertEquals([boat.media.contentType, boat.media.url.startsWith('/file/films/boat.mp4?ticket=')], ['video/mp4', true]);
+      assertEquals(await read(`${baseUrl}${boat.media.url}`), [200, 'boat.mp4']);
+      boat.made.release();
+      assertEquals((await read(`${baseUrl}${boat.media.url}`))[0], 403);
+      const sea = await player.nearby('/films/sea.mov', ADMIN_ACCESS);
+      assertEquals([sea.media.contentType, /^\/live\/[^/]+\/index\.m3u8$/.test(sea.media.url)], ['application/x-mpegurl', true]);
+      sea.made.release();
+      await assertRejects(() => player.nearby('/films/old.avi', ADMIN_ACCESS), Error, 'its length is not known');
+      await assertRejects(() => player.nearby('/photos/a.jpg', ADMIN_ACCESS), Error, 'not a recording or a video');
+      await assertRejects(() => player.nearby('/dashboard-wall/Kitchen', ADMIN_ACCESS), Error, 'not a recording or a video');
+      Object.assign(service, { video: false });
+      await assertRejects(() => player.nearby('/films/sea.mov', ADMIN_ACCESS), Error, 'H.264 made by the media service, which is not there');
+      Object.assign(service, { video: true });
+
+      const nearby = new NearbyFiles(player, 200);
+      const held = await nearby.start('/films/boat.mp4', ADMIN_ACCESS);
+      assertEquals([held.type, held.title], ['video/mp4', 'boat.mp4']);
+      assertEquals(nearby.renew(held.id, GUEST_ACCESS), false);
+      assertEquals(nearby.stop(held.id, GUEST_ACCESS), false);
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      assertEquals(nearby.renew(held.id, ADMIN_ACCESS), true);
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      assertEquals(await read(`${baseUrl}${held.url}`), [200, 'boat.mp4']);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      assertEquals(nearby.renew(held.id, ADMIN_ACCESS), false);
+      assertEquals((await read(`${baseUrl}${held.url}`))[0], 403);
+      const again = await nearby.start('/films/sea.mov', ADMIN_ACCESS);
+      assertEquals(nearby.stop(again.id, ADMIN_ACCESS), true);
+      assertEquals((await read(`${baseUrl}${again.url}`))[0], 404);
+      nearby.close();
     });
   } finally {
     await harness.stop();

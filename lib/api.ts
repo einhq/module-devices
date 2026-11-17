@@ -141,3 +141,11 @@ export type FoundDetail = FoundDevice & { host: NetworkHost };
 
 /** `devices-snmp`: one object of a walk, its value as text when it is a 64-bit counter. */
 export type SnmpObject = { oid: string; type: string; value: string | number | null };
+
+/**
+ * `devices-nearby start <path>`: a recording or video made for a screen near the browser to fetch,
+ * kept while `devices-nearby renew <id>` is run within five minutes of the last time. `url` is a
+ * path on EiN's own address, read without signing in: the file with a ticket for it alone, or
+ * H.264 HLS made while it is read; `type` is its media type.
+ */
+export type NearbyFile = { id: string; url: string; type: string; title: string };

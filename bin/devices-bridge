@@ -6,7 +6,8 @@
  * dlna, http), and keeps the cameras of the rtsp driver with the restreamer (CFG_DEVICES_STREAMS_URL).
  * Videos and pages written to a screen are made into video by the media service, asked as this
  * service, once the writer's access has been checked; while the media service does not answer, or
- * makes neither, a screen is given only what it plays as it is.
+ * makes neither, a screen is given only what it plays as it is. A recording or video a browser hands
+ * a screen near it (`devices-nearby`) is made here the same way.
  *
  * While CFG_DEVICES_MQTT_URL is empty it hears no broker and runs the other drivers alone.
  * It runs until stopped, connecting again whenever the broker goes away.
@@ -16,7 +17,7 @@ import { type Access, type CmdReturn, type Command, serviceKey } from '@ein/clie
 import { runBridge } from '@devices/bridge';
 import { createRestreamer } from '@devices/cameras';
 import { DeviceWriter } from '@devices/drivers';
-import { createPolledDrivers, mediaAddress, type VideoStreamRequest } from '@devices/network';
+import { createPolledDrivers, mediaAddress, MediaPlayer, NearbyFiles, type VideoStreamRequest } from '@devices/network';
 import { connectMqtt } from '@devices/mqtt';
 import { createSources } from '@devices/sources';
 import { bridgeState } from '@devices/state';
@@ -81,7 +82,8 @@ const devicesBridge = async (cmd: Command): CmdReturn => {
     },
   };
   const polled = createPolledDrivers(fetch, media);
-  await runBridge({ cmd, url, connect, sources, polled, restreamer, fetcher: fetch, devices, writer, stopped });
+  const nearby = new NearbyFiles(new MediaPlayer(media));
+  await runBridge({ cmd, url, connect, sources, polled, restreamer, fetcher: fetch, devices, writer, nearby, stopped });
   return 0;
 };
 

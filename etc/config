@@ -1,0 +1,5 @@
+# devices's own choice of settings, linked as /etc/config.d/devices by mod setup and sourced before
+# /etc/config, so a value the administrator sets there wins over these.
+
+# Make a recording or video for a screen near the browser, which "Show on" hands its address to.
+export CFG_FILE_STREAMER='devices-nearby'

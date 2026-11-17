@@ -18,7 +18,8 @@ import { rendererOf, webPageOf } from './identify.ts';
 
 export { adoptShelly } from './adopt.ts';
 export { answersSnmp, createPolledDrivers, DEFAULT_COMMUNITY, POLLED_DRIVERS } from './polled.ts';
-export { mediaAddress, type VideoStreamRequest } from './play.ts';
+export { NearbyFiles } from './nearby.ts';
+export { mediaAddress, MediaPlayer, type VideoStreamRequest } from './play.ts';
 export { snmpWalk } from './snmp.ts';
 
 /**

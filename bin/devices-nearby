@@ -1,0 +1,64 @@
+#!ts
+/**
+ * devices-nearby — a recording or video for a screen near the browser, one EiN does not reach
+ * itself, which the browser hands the address to.
+ *
+ *   devices-nearby start <path>
+ *   devices-nearby renew <id>
+ *   devices-nearby stop <id>
+ *
+ * `start` makes the file for the screen to fetch as the caller, in the form a Cast device is given
+ * it (`show`): a recording as its playback copy or as it is, a video that is H.264 within 1080p as
+ * it is, any other as H.264 HLS the media service makes while it is read. It answers a path on
+ * EiN's own address that is read without signing in, kept while `renew` is run within five minutes
+ * of the last time, and let go of on `stop`. The devices-bridge service makes and keeps them.
+ */
+
+import { type CmdReturn, collectUnknownFlags, type Command, parseArgs, reportUnknownFlags } from '@ein/client';
+import type { NearbyFile } from '@devices/api';
+import { bridgeState } from '@devices/state';
+
+const USAGE = 'usage: devices-nearby start <path> | renew <id> | stop <id>';
+
+const devicesNearby = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+  const [sub, arg] = flags._.map(String);
+  const fail = async (message: string) => {
+    await cmd.writeError(`devices-nearby: ${message}\n`);
+    return 1;
+  };
+  if (!['start', 'renew', 'stop'].includes(sub) || !arg || flags._.length > 2) return await fail(USAGE);
+  const nearby = bridgeState()?.nearby;
+  if (!nearby) return await fail('the devices-bridge service is not running, and it makes them');
+
+  if (sub === 'start') {
+    try {
+      const file = await nearby.start(arg, cmd.access);
+      if (cmd.json) await cmd.writeJSON(file satisfies NearbyFile);
+      else await cmd.writeLn(`${file.id}  ${file.type}  ${file.url}`);
+      return 0;
+    } catch (error) {
+      return await fail(error instanceof Error ? error.message : String(error));
+    }
+  }
+  const done = sub === 'renew' ? nearby.renew(arg, cmd.access) : nearby.stop(arg, cmd.access);
+  if (!done) return await fail(`${arg}: none of yours, or it has run out`);
+  if (cmd.json) await cmd.writeJSON({ ok: true });
+  return 0;
+};
+
+devicesNearby.spec = {
+  name: 'devices-nearby',
+  effect: 'read' as const,
+  description: 'A recording or video for a screen near the browser to fetch, as the caller: start makes it, renew keeps it five minutes more, stop lets go of it',
+  args: [
+    { name: 'action', type: 'string' as const, description: 'start, renew or stop' },
+    { name: 'target', type: 'string' as const, description: "start: the file's path; renew and stop: the id start answered" },
+  ],
+  examples: ['devices-nearby start /media/2024/boat.mp4', 'devices-nearby renew near-3f2a9c0d1e4b5a6c'],
+  returns: 'start: id, url (a path read without signing in), type and title',
+};
+
+export default devicesNearby;

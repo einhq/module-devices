@@ -1,6 +1,6 @@
 {
   "name": "devices",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Drivers for core's devices: sensors, buttons, plugs and lights that announce themselves over MQTT (Home Assistant discovery, Shelly), printers, NAS boxes, speakers and screens asked over the network, web APIs, and cameras over RTSP and ONVIF become devices under /dev; what is on the network is found and can be added, a photo, a video or a page written to a screen is shown on it, and a camera is watched live",
   "license": "MIT",
   "coreApi": "^0.15.16",

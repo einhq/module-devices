@@ -7,6 +7,7 @@
  */
 
 import type { NetworkHosts } from './network/found.ts';
+import type { NearbyFiles } from './network/nearby.ts';
 
 export type BridgeState = {
   url: string;
@@ -22,6 +23,8 @@ export type BridgeState = {
   network: NetworkHosts;
   /** Ask a device of a polled driver now; set once the poller runs. */
   pollNow?(device: string): void;
+  /** The recordings and videos given to screens near a browser; unset where nothing makes them. */
+  nearby?: NearbyFiles;
 };
 
 let running: BridgeState | undefined;

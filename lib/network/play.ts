@@ -179,10 +179,13 @@ export const mediaAddress = (setting: string | undefined, broker: string | undef
  * A thing made for a device to fetch: where, how to keep it and let it go, and how to begin making
  * what the device fetches first when it plays it from a second, before it is given or told to seek.
  */
-type Made = { url: string; renew?(): void; release(): void; prepare?(seconds: number): void };
+export type Made = { url: string; renew?(): void; release(): void; prepare?(seconds: number): void };
 
-/** One way a line can reach a device, as the type it fetches; made only when it is the one given. */
-type Form = { contentType: string; live?: boolean; make(access: Access, address: string): Promise<Made> };
+/**
+ * One way a line can reach a device, as the type it fetches; made only when it is the one given.
+ * `stream` is one stream made while it is read, whose length nobody knows up front.
+ */
+type Form = { contentType: string; live?: boolean; stream?: boolean; make(access: Access, address: string): Promise<Made> };
 
 /** A line written to the device, as what it is and the forms it can go in, the best first; with none, why. */
 type Entry = { line: string; title: string; picture: boolean; forms: Form[]; why?: string };
@@ -319,6 +322,27 @@ export class MediaPlayer {
     this.#given.set(device, given);
     this.#pictureEnds(device, given);
     return { message: items.length === 1 ? `playing ${items[0].title}` : `playing ${items.length} things, from ${items[0].title}` };
+  }
+
+  /**
+   * The recording or video at `path` as a browser hands it to a screen near it, one EiN does not
+   * reach itself, made for that screen to fetch as `access`: the first of the forms a device is
+   * given under `video=h264` that is a file, or HLS of the video's whole length. Not one stream
+   * whose length is unknown: a browser takes such a video's length to be what it has read of it,
+   * and Chrome hands a screen nothing shorter than 15 s. Its `url` is a path on EiN's own address,
+   * at whichever the browser reached EiN.
+   */
+  async nearby(path: string, access: Access): Promise<{ media: Media; made: Made }> {
+    if (!path.startsWith('/')) throw new Error(`${path}: write a path from /`);
+    let asked: Promise<MediaService> | undefined;
+    const service = () => asked ??= this.host?.mediaService?.() ?? Promise.resolve({ video: true, pages: true });
+    const [entry] = await this.#entries([path], access, DEFAULT_SETTINGS, service);
+    if (entry.picture || entry.forms.some((form) => form.live)) throw new Error(`${path} is not a recording or a video`);
+    if (!entry.forms.length) throw new Error(`${path}: it goes as H.264 made by the media service, which is not there`);
+    const form = entry.forms.find((each) => !each.stream);
+    if (!form) throw new Error(`${path}: its length is not known, and a browser hands a screen only a video whose length it knows`);
+    const made = await form.make(access, '');
+    return { media: { url: made.url, contentType: form.contentType, title: entry.title }, made };
   }
 
   /** The line, as it was written, of what the device plays of what EiN gave it; undefined when nothing. */
@@ -560,6 +584,7 @@ export class MediaPlayer {
       : [];
     const live = (extension: 'ts' | 'mp4', contentType: string): Form => ({
       contentType,
+      stream: true,
       make: (_access, address) => {
         // One reader at a time: a player that opens it again has let go of the last.
         let reading: { stop(): void } | undefined;

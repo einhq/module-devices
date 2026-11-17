@@ -24,6 +24,7 @@ import type { Restreamer } from './cameras/restreamer.ts';
 import { commandValue, type DeviceWriter } from './drivers.ts';
 import type { MqttConnect, MqttConnection, MqttMessage } from './mqtt.ts';
 import { NetworkHosts } from './network/found.ts';
+import type { NearbyFiles } from './network/nearby.ts';
 import type { PolledDriver } from './network/polled.ts';
 import { startPoller } from './network/poller.ts';
 import type { Publish, RunningSource, Update } from './sources/mod.ts';
@@ -44,6 +45,8 @@ type BridgeOptions = {
   fetcher: typeof fetch;
   devices: ModuleDevices;
   writer: DeviceWriter;
+  /** What makes recordings and videos for screens near a browser; unset where nothing does. */
+  nearby?: NearbyFiles;
   /** Resolves when the bridge is to stop. */
   stopped: Promise<void>;
 };
@@ -73,6 +76,7 @@ export const runBridge = async (options: BridgeOptions): Promise<void> => {
     messages: 0,
     notes: () => sources.flatMap((source) => source.notes?.() ?? []),
     network,
+    ...(options.nearby ? { nearby: options.nearby } : {}),
   };
   setBridgeState(state);
 
@@ -165,6 +169,7 @@ export const runBridge = async (options: BridgeOptions): Promise<void> => {
   for (const each of unregister) each();
   poller.stop();
   for (const stop of stopCameras) stop();
+  options.nearby?.close();
   await writer.close();
   setBridgeState(undefined);
   await log('stopped');
