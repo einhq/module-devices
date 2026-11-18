@@ -1,6 +1,6 @@
 #!ts
 /**
- * devices-nearby — a recording or video for a screen near the browser, one EiN does not reach
+ * devices-nearby — a recording, video or picture for a screen near the browser, one EiN does not reach
  * itself, which the browser hands the address to.
  *
  *   devices-nearby start <path>
@@ -9,7 +9,8 @@
  *
  * `start` makes the file for the screen to fetch as the caller, in the form a Cast device is given
  * it (`show`): a recording as its playback copy or as it is, a video that is H.264 within 1080p as
- * it is, any other as H.264 HLS the media service makes while it is read. It answers a path on
+ * it is, any other as H.264 HLS the media service makes while it is read, a picture as its largest
+ * rendition or as it is; a recording's or video's transcript goes with it. It answers a path on
  * EiN's own address that is read without signing in, kept while `renew` is run within five minutes
  * of the last time, and let go of on `stop`. The devices-bridge service makes and keeps them.
  */
@@ -52,13 +53,13 @@ const devicesNearby = async (cmd: Command): CmdReturn => {
 devicesNearby.spec = {
   name: 'devices-nearby',
   effect: 'read' as const,
-  description: 'A recording or video for a screen near the browser to fetch, as the caller: start makes it, renew keeps it five minutes more, stop lets go of it',
+  description: 'A recording, video or picture for a screen near the browser to fetch, as the caller: start makes it, renew keeps it five minutes more, stop lets go of it',
   args: [
     { name: 'action', type: 'string' as const, description: 'start, renew or stop' },
     { name: 'target', type: 'string' as const, description: "start: the file's path; renew and stop: the id start answered" },
   ],
   examples: ['devices-nearby start /media/2024/boat.mp4', 'devices-nearby renew near-3f2a9c0d1e4b5a6c'],
-  returns: 'start: id, url (a path read without signing in), type and title',
+  returns: 'start: id, url (a path read without signing in), type, title, and captions (the transcript, read the same way) when there is one',
 };
 
 export default devicesNearby;

@@ -143,9 +143,10 @@ export type FoundDetail = FoundDevice & { host: NetworkHost };
 export type SnmpObject = { oid: string; type: string; value: string | number | null };
 
 /**
- * `devices-nearby start <path>`: a recording or video made for a screen near the browser to fetch,
- * kept while `devices-nearby renew <id>` is run within five minutes of the last time. `url` is a
- * path on EiN's own address, read without signing in: the file with a ticket for it alone, or
- * H.264 HLS made while it is read; `type` is its media type.
+ * `devices-nearby start <path>`: a recording, video or picture made for a screen near the browser
+ * to fetch, kept while `devices-nearby renew <id>` is run within five minutes of the last time.
+ * `url` is a path on EiN's own address, read without signing in: the file with a ticket for it
+ * alone, or H.264 HLS made while it is read; `type` is its media type. `captions`, when the
+ * recording or video has a transcript, is that WebVTT file the same way.
  */
-export type NearbyFile = { id: string; url: string; type: string; title: string };
+export type NearbyFile = { id: string; url: string; type: string; title: string; captions?: string };

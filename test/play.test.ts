@@ -421,39 +421,58 @@ Deno.test({ name: 'videos, pictures and pages written to a screen', sanitizeReso
       player.forget('tv');
     });
 
-    await t.step("a screen near the browser is given a file or HLS of known length, on a path of EiN's own address, kept while it is renewed", async () => {
-      const boat = await player.nearby('/films/boat.mp4', ADMIN_ACCESS);
-      assertEquals([boat.media.contentType, boat.media.url.startsWith('/file/films/boat.mp4?ticket=')], ['video/mp4', true]);
-      assertEquals(await read(`${baseUrl}${boat.media.url}`), [200, 'boat.mp4']);
-      boat.made.release();
-      assertEquals((await read(`${baseUrl}${boat.media.url}`))[0], 403);
-      const sea = await player.nearby('/films/sea.mov', ADMIN_ACCESS);
-      assertEquals([sea.media.contentType, /^\/live\/[^/]+\/index\.m3u8$/.test(sea.media.url)], ['application/x-mpegurl', true]);
-      sea.made.release();
-      await assertRejects(() => player.nearby('/films/old.avi', ADMIN_ACCESS), Error, 'its length is not known');
-      await assertRejects(() => player.nearby('/photos/a.jpg', ADMIN_ACCESS), Error, 'not a recording or a video');
-      await assertRejects(() => player.nearby('/dashboard-wall/Kitchen', ADMIN_ACCESS), Error, 'not a recording or a video');
-      Object.assign(service, { video: false });
-      await assertRejects(() => player.nearby('/films/sea.mov', ADMIN_ACCESS), Error, 'H.264 made by the media service, which is not there');
-      Object.assign(service, { video: true });
+    await t.step(
+      "a screen near the browser is given a file or HLS of known length, or a picture, with the transcript, on paths of EiN's own address, kept while they are renewed",
+      async () => {
+        const boat = await player.nearby('/films/boat.mp4', ADMIN_ACCESS);
+        assertEquals([boat.media.contentType, boat.media.url.startsWith('/file/films/boat.mp4?ticket=')], ['video/mp4', true]);
+        assertEquals(await read(`${baseUrl}${boat.media.url}`), [200, 'boat.mp4']);
+        boat.made.release();
+        assertEquals((await read(`${baseUrl}${boat.media.url}`))[0], 403);
+        const sea = await player.nearby('/films/sea.mov', ADMIN_ACCESS);
+        assertEquals([sea.media.contentType, /^\/live\/[^/]+\/index\.m3u8$/.test(sea.media.url)], ['application/x-mpegurl', true]);
+        sea.made.release();
+        await assertRejects(() => player.nearby('/films/old.avi', ADMIN_ACCESS), Error, 'its length is not known');
+        const photo = await player.nearby('/photos/a.jpg', ADMIN_ACCESS);
+        assertEquals([photo.media.contentType, photo.media.url.startsWith('/file/photos/a.jpg/thumbnails/2560x2560.avif?ticket='), photo.media.captions], [
+          'image/avif',
+          true,
+          undefined,
+        ]);
+        photo.made.release();
+        await assertRejects(() => player.nearby('/photos/b.heic', ADMIN_ACCESS), Error, 'only JPEG, PNG, AVIF, WebP or GIF');
+        await assertRejects(() => player.nearby('/dashboard-wall/Kitchen', ADMIN_ACCESS), Error, 'not a recording, a video or a picture');
 
-      const nearby = new NearbyFiles(player, 200);
-      const held = await nearby.start('/films/boat.mp4', ADMIN_ACCESS);
-      assertEquals([held.type, held.title], ['video/mp4', 'boat.mp4']);
-      assertEquals(nearby.renew(held.id, GUEST_ACCESS), false);
-      assertEquals(nearby.stop(held.id, GUEST_ACCESS), false);
-      await new Promise((resolve) => setTimeout(resolve, 120));
-      assertEquals(nearby.renew(held.id, ADMIN_ACCESS), true);
-      await new Promise((resolve) => setTimeout(resolve, 120));
-      assertEquals(await read(`${baseUrl}${held.url}`), [200, 'boat.mp4']);
-      await new Promise((resolve) => setTimeout(resolve, 200));
-      assertEquals(nearby.renew(held.id, ADMIN_ACCESS), false);
-      assertEquals((await read(`${baseUrl}${held.url}`))[0], 403);
-      const again = await nearby.start('/films/sea.mov', ADMIN_ACCESS);
-      assertEquals(nearby.stop(again.id, ADMIN_ACCESS), true);
-      assertEquals((await read(`${baseUrl}${again.url}`))[0], 404);
-      nearby.close();
-    });
+        // A transcript goes with its video, with a ticket of its own that is let go of with the video's.
+        await vfs.create(ADMIN_ACCESS, 'dir', '/films/boat.mp4', 'metadata', {});
+        await file('/films/boat.mp4/metadata', 'transcript', { mimetype: 'text/vtt' }, 'WEBVTT\n');
+        const captioned = await player.nearby('/films/boat.mp4', ADMIN_ACCESS);
+        assertEquals(captioned.media.captions?.startsWith('/file/films/boat.mp4/metadata/transcript?ticket='), true);
+        assertEquals(await read(`${baseUrl}${captioned.media.captions}`), [200, 'WEBVTT\n']);
+        captioned.made.release();
+        assertEquals((await read(`${baseUrl}${captioned.media.captions}`))[0], 403);
+        Object.assign(service, { video: false });
+        await assertRejects(() => player.nearby('/films/sea.mov', ADMIN_ACCESS), Error, 'H.264 made by the media service, which is not there');
+        Object.assign(service, { video: true });
+
+        const nearby = new NearbyFiles(player, 200);
+        const held = await nearby.start('/films/boat.mp4', ADMIN_ACCESS);
+        assertEquals([held.type, held.title], ['video/mp4', 'boat.mp4']);
+        assertEquals(nearby.renew(held.id, GUEST_ACCESS), false);
+        assertEquals(nearby.stop(held.id, GUEST_ACCESS), false);
+        await new Promise((resolve) => setTimeout(resolve, 120));
+        assertEquals(nearby.renew(held.id, ADMIN_ACCESS), true);
+        await new Promise((resolve) => setTimeout(resolve, 120));
+        assertEquals(await read(`${baseUrl}${held.url}`), [200, 'boat.mp4']);
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        assertEquals(nearby.renew(held.id, ADMIN_ACCESS), false);
+        assertEquals((await read(`${baseUrl}${held.url}`))[0], 403);
+        const again = await nearby.start('/films/sea.mov', ADMIN_ACCESS);
+        assertEquals(nearby.stop(again.id, ADMIN_ACCESS), true);
+        assertEquals((await read(`${baseUrl}${again.url}`))[0], 404);
+        nearby.close();
+      },
+    );
   } finally {
     await harness.stop();
   }

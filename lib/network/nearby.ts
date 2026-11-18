@@ -1,5 +1,5 @@
 /**
- * Recordings and videos a browser hands a screen near it, one EiN does not reach itself (a TV where
+ * Recordings, videos and pictures a browser hands a screen near it, one EiN does not reach itself (a TV where
  * a phone that reaches EiN over the internet is): each in the form `MediaPlayer.nearby` makes, kept
  * while the browser renews it and let go of `NEARBY_TTL_MS` after it last did, or when it is
  * stopped. Kept in this process's memory, by the running bridge, which asks the media service.
@@ -19,13 +19,13 @@ export class NearbyFiles {
 
   constructor(private readonly player: MediaPlayer, private readonly ttlMs = NEARBY_TTL_MS) {}
 
-  /** The recording or video at `path`, made for a screen near the browser to fetch as `access`. */
+  /** The recording, video or picture at `path`, made for a screen near the browser to fetch as `access`, with its transcript. */
   async start(path: string, access: Access): Promise<NearbyFile> {
     const { media, made } = await this.player.nearby(path, access);
     made.prepare?.(0);
     const id = `near-${crypto.randomUUID().replaceAll('-', '').slice(0, 16)}`;
     this.#held.set(id, { uid: access.uid, made, timer: this.#expire(id) });
-    return { id, url: media.url, type: media.contentType, title: media.title };
+    return { id, url: media.url, type: media.contentType, title: media.title, ...(media.captions ? { captions: media.captions } : {}) };
   }
 
   /** Keep `id` another `NEARBY_TTL_MS`; false when it has run out, or is not `access`'s. */

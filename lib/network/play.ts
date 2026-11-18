@@ -325,24 +325,47 @@ export class MediaPlayer {
   }
 
   /**
-   * The recording or video at `path` as a browser hands it to a screen near it, one EiN does not
-   * reach itself, made for that screen to fetch as `access`: the first of the forms a device is
-   * given under `video=h264` that is a file, or HLS of the video's whole length. Not one stream
-   * whose length is unknown: a browser takes such a video's length to be what it has read of it,
-   * and Chrome hands a screen nothing shorter than 15 s. Its `url` is a path on EiN's own address,
-   * at whichever the browser reached EiN.
+   * The recording, video or picture at `path` as a browser hands it to a screen near it, one EiN
+   * does not reach itself, made for that screen to fetch as `access`: the first of the forms a
+   * device is given under `video=h264` that is a file, or HLS of the video's whole length. Not one
+   * stream whose length is unknown: a browser takes such a video's length to be what it has read of
+   * it, and Chrome hands a screen nothing shorter than 15 s. A recording's or video's transcript, a
+   * WebVTT file, goes with it as `captions`, for a screen that draws them. Each `url` is a path on
+   * EiN's own address, at whichever the browser reached EiN.
    */
-  async nearby(path: string, access: Access): Promise<{ media: Media; made: Made }> {
+  async nearby(path: string, access: Access): Promise<{ media: Media & { captions?: string }; made: Made }> {
     if (!path.startsWith('/')) throw new Error(`${path}: write a path from /`);
     let asked: Promise<MediaService> | undefined;
     const service = () => asked ??= this.host?.mediaService?.() ?? Promise.resolve({ video: true, pages: true });
     const [entry] = await this.#entries([path], access, DEFAULT_SETTINGS, service);
-    if (entry.picture || entry.forms.some((form) => form.live)) throw new Error(`${path} is not a recording or a video`);
-    if (!entry.forms.length) throw new Error(`${path}: it goes as H.264 made by the media service, which is not there`);
+    if (entry.forms.some((form) => form.live)) throw new Error(`${path} is not a recording, a video or a picture`);
+    if (!entry.forms.length) {
+      throw new Error(
+        entry.picture ? `${path}: a screen is given only JPEG, PNG, AVIF, WebP or GIF` : `${path}: it goes as H.264 made by the media service, which is not there`,
+      );
+    }
     const form = entry.forms.find((each) => !each.stream);
     if (!form) throw new Error(`${path}: its length is not known, and a browser hands a screen only a video whose length it knows`);
     const made = await form.make(access, '');
-    return { media: { url: made.url, contentType: form.contentType, title: entry.title }, made };
+    const transcript = entry.picture ? undefined : await this.#transcript(path, access);
+    if (!transcript) return { media: { url: made.url, contentType: form.contentType, title: entry.title }, made };
+    return {
+      media: { url: made.url, contentType: form.contentType, title: entry.title, captions: transcript.url },
+      made: {
+        url: made.url,
+        renew: () => (made.renew?.(), transcript.renew?.()),
+        release: () => (made.release(), transcript.release()),
+        ...(made.prepare ? { prepare: made.prepare } : {}),
+      },
+    };
+  }
+
+  /** The transcript of the recording or video at `path`, with a ticket of its own; undefined when it has none `access` reads. */
+  async #transcript(path: string, access: Access): Promise<Made | undefined> {
+    const file = `${path}/metadata/transcript`;
+    const node = await this.host!.vfs.get(access, file).catch(() => undefined);
+    if (node?.type !== 'file' || !(node.attrs as FileAttrs).size) return undefined;
+    return await this.#ticketed(file, access, '').catch(() => undefined);
   }
 
   /** The line, as it was written, of what the device plays of what EiN gave it; undefined when nothing. */
