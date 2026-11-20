@@ -1,6 +1,6 @@
 /**
  * A video as HLS made while it plays: the playlist names every segment with its length, a segment
- * is made when asked for and the next three after it, one at a time, the segments from a second are
+ * is made when asked for and the next three after it, two at a time, the segments from a second are
  * begun before they are asked for, a segment asked for out of turn drops what was made ahead, and a
  * closed video makes nothing more.
  */
@@ -60,13 +60,13 @@ Deno.test('the playlist names each segment with its length, the last one short',
   for (const name of ['3.ts', '-1.ts', 'x.ts', 'index.m3u']) assertEquals(await video.get(name), undefined);
 });
 
-Deno.test('a segment is made when asked for and the next three after it, one at a time', async () => {
+Deno.test('a segment is made when asked for and the next three after it, two at a time', async () => {
   const media = service();
   const video = new HlsVideo(media.stream, 60);
   assertEquals(await text(video, '0.ts'), '0+4');
   await made();
   assertEquals(media.asked, [0, 4, 8, 12]);
-  assertEquals(media.most(), 1);
+  assertEquals(media.most(), 2);
   assertEquals(await text(video, '1.ts'), '4+4');
   assertEquals(await text(video, '2.ts'), '8+4');
   await made();
@@ -87,7 +87,7 @@ Deno.test('the segments from a second are begun before they are asked for, and a
   video.prepare(90);
   await made();
   assertEquals(media.asked.slice(-4), [88, 92, 96, 100]);
-  assertEquals(media.most(), 1);
+  assertEquals(media.most(), 2);
   const before = media.asked.length;
   assertEquals(await text(video, '22.ts'), '88+4');
   assertEquals(media.asked.length, before);

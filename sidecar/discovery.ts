@@ -31,18 +31,21 @@
  * broker at: MQTT_HOST when it names one, else this machine's address on the network most of them
  * are on, and `version`, the sidecar's VERSION.
  *
- * Plain Deno with no imports: MQTT 3.1.1 (CONNECT, SUBSCRIBE, PUBLISH at QoS 0, DISCONNECT) is written
+ * Plain Deno with no imports beyond its version.json: MQTT 3.1.1 (CONNECT, SUBSCRIBE, PUBLISH at QoS 0, DISCONNECT) is written
  * here, one connection per round and one more for the first round's reading. Needs --allow-net, --allow-env, --allow-run=cat (the ARP table),
  * --allow-sys=networkInterfaces and --unstable-net (for UDP).
  */
 
+import sidecar from './version.json' with { type: 'json' };
+
 /**
  * The version of what the sidecar offers EiN: its environment, these topics and messages, the broker's
- * accounts and the restreamer's. Below 1.0.0 the minor is the breaking part, as in a caret range. The
- * image is tagged with it and with its line (0.1 for 0.1.x), which an installation pulls for the range
- * the module asks for.
+ * accounts and the restreamer's. Below 1.0.0 the minor is the breaking part, as in a caret range. It is
+ * the sidecar's release, version.json beside this, raised with the module's release as the commits
+ * touching sidecar/ call for; the image ghcr.io/einhq/devices:<version> is built once for it, and an
+ * installation runs the newest of the line the module asks for.
  */
-export const VERSION = '0.1.0';
+export const VERSION: string = sidecar.version;
 
 const env = (key: string, fallback = ''): string => Deno.env.get(key)?.trim() || fallback;
 const seconds = (key: string, fallback: number): number => {

@@ -6,14 +6,14 @@
  *
  * From the environment, with their defaults:
  *
- * - `EIN_BIND` (`0.0.0.0`): the address the broker, the restreamer's API and its RTSP server listen on.
+ * - `EIN_BIND` (`0.0.0.0`): the address the broker and the restreamer's API listen on.
  * - `MQTT_PORT` (1883); `MQTT_EIN_PASSWORD` and `MQTT_DEVICE_PASSWORD`, required: the broker's two
  *   accounts, `ein` and `device`. No anonymous client is let in. Its retained messages and the
  *   hashed passwords are kept in `/data/mqtt`.
- * - `STREAMS_PORT` (1984), the restreamer's HTTP API (sources, MSE over WebSocket, a JPEG frame);
- *   `RTSP_PORT` (8554), where it serves each source again over RTSP; `STREAMS_PASSWORD`, required:
- *   the API and RTSP's account `ein`. The API asks for it from this machine too; RTSP does not, as
- *   go2rtc lets loopback in.
+ * - `STREAMS_PORT` (1984), the restreamer's HTTP API (sources, MPEG-TS, fragmented MP4);
+ *   `STREAMS_PASSWORD`, required: the API's account `ein`, which it asks for from this machine too.
+ *   EiN reads a source's MPEG-TS and fragmented MP4 from the API. go2rtc serves nothing else: its
+ *   RTSP server and WebRTC are off.
  * - The listener's own settings (`DISCOVERY_INTERVAL`, `DISCOVERY_FORGET`, `DISCOVERY_PREFIX`),
  *   passed on to it.
  *
@@ -42,7 +42,6 @@ const required = (key: string): string => {
 const BIND = env('EIN_BIND', '0.0.0.0');
 const MQTT_PORT = port('MQTT_PORT', 1883);
 const STREAMS_PORT = port('STREAMS_PORT', 1984);
-const RTSP_PORT = port('RTSP_PORT', 8554);
 const EIN_PASSWORD = required('MQTT_EIN_PASSWORD');
 const DEVICE_PASSWORD = required('MQTT_DEVICE_PASSWORD');
 const STREAMS_PASSWORD = required('STREAMS_PASSWORD');
@@ -88,11 +87,10 @@ const prepareRestreamer = async (): Promise<void> => {
       '  username: ein',
       `  password: ${quoted(STREAMS_PASSWORD)}`,
       '  local_auth: true',
+      // RTSP and WebRTC, which go2rtc opens on 8554 and 8555 unless told not to, are off: EiN reads
+      // what it needs from the API.
       'rtsp:',
-      `  listen: ${quoted(listen(RTSP_PORT))}`,
-      '  username: ein',
-      `  password: ${quoted(STREAMS_PASSWORD)}`,
-      // go2rtc opens WebRTC on 8555 unless told not to; pages watch over the API's WebSocket.
+      '  listen: ""',
       'webrtc:',
       '  listen: ""',
       'log:',
@@ -201,7 +199,7 @@ if (import.meta.main) {
   await prepareRestreamer();
   Deno.addSignalListener('SIGTERM', stop);
   Deno.addSignalListener('SIGINT', stop);
-  log(`broker on ${BIND}:${MQTT_PORT}, restreamer on ${BIND}:${STREAMS_PORT} (RTSP ${RTSP_PORT})`);
+  log(`broker on ${BIND}:${MQTT_PORT}, restreamer on ${BIND}:${STREAMS_PORT}`);
   const [broker, listener, restreamer] = children;
   const running = [keep(broker)];
   await waitForBroker(10_000);

@@ -12,14 +12,15 @@ const choiceLabel = (endpoint: EndpointSummary): string =>
 
 /**
  * `/camera-live?device=<path>`: a camera's picture live, as the Live tab of its page (a
- * `device.tabs` panel for a device with a stream). The main stream first; a camera with a second,
- * smaller one can be switched to it, which costs less to send.
+ * `device.tabs` panel for a device with a stream watched live): its streams a page reads as they come
+ * (`live`, fragmented MP4). The main stream first; a camera with a second, smaller one can be
+ * switched to it, which costs less to send.
  */
 export default function CameraLivePage() {
   const [params] = useSearchParams();
   const name = (params.get('device') ?? '').split('/').filter(Boolean).at(-1) ?? '';
   const { data: info, loading, error } = useCommand<DeviceInfo>(`device-show ${name}`);
-  const streams = (info?.endpointList ?? []).filter((endpoint) => endpoint.type === 'stream' && !endpoint.retired);
+  const streams = (info?.endpointList ?? []).filter((endpoint) => endpoint.type === 'stream' && endpoint.live && !endpoint.retired);
   const [chosen, setChosen] = useState<string>();
   const [status, setStatus] = useState<LiveStatus>({ state: 'connecting' });
   const stream = streams.find((endpoint) => endpoint.name === chosen) ?? streams[0];
@@ -42,7 +43,7 @@ export default function CameraLivePage() {
           : <Text size='sm' c='dimmed'>{choiceLabel(stream)}</Text>}
         <Text size='xs' c={status.state === 'failed' ? 'red' : 'dimmed'}>
           {status.state === 'connecting'
-            ? 'Connecting…'
+            ? status.reason ?? 'Connecting…'
             : status.state === 'playing'
             ? status.reason ?? 'Live'
             : status.state === 'ended'

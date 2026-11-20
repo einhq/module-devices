@@ -64,10 +64,9 @@ const sidecarOf = (state: ReturnType<typeof bridgeState>): DevicesStatus['sideca
 const restreamerOf = async (cmd: Command): Promise<RestreamerStatus> => {
   const url = (cmd.env.CFG_DEVICES_STREAMS_URL ?? '').trim();
   if (!url) return { configured: false, answering: false };
-  const rtsp = (cmd.env.CFG_DEVICES_STREAMS_RTSP ?? '').trim();
-  const said = { configured: true, url, ...(rtsp ? { rtsp } : {}) };
+  const said = { configured: true, url };
   try {
-    const restreamer = createRestreamer(fetch, url, await serviceKey(cmd, 'CFG_DEVICES_STREAMS_KEY', 'CFG_DEVICES_STREAMS_URL') ?? '', rtsp);
+    const restreamer = createRestreamer(fetch, url, await serviceKey(cmd, 'CFG_DEVICES_STREAMS_KEY', 'CFG_DEVICES_STREAMS_URL') ?? '');
     return { ...said, answering: true, streams: (await restreamer.names()).size };
   } catch (error) {
     return { ...said, answering: false, error: error instanceof Error ? error.message : String(error) };
@@ -129,7 +128,7 @@ devicesStatus.spec = {
   ],
   examples: ['devices-status', 'devices-status --brief', 'devices-status --streams'],
   returns:
-    'DevicesStatus: configured, url, running, connected, since, drivers, devices, endpoints, messages, unsupported, lastError, sidecar {version, problem}; with --streams, RestreamerStatus: configured, url, rtsp, answering, streams, error',
+    'DevicesStatus: configured, url, running, connected, since, drivers, devices, endpoints, messages, unsupported, lastError, sidecar {version, problem}; with --streams, RestreamerStatus: configured, url, answering, streams, error',
 };
 
 export default devicesStatus;

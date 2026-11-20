@@ -1,15 +1,14 @@
 name: sidecar
 
-# The devices sidecar's image (sidecar/Containerfile), published for the installer to pull:
-# ghcr.io/einhq/devices:main is main as of the last build, :sha-<commit> each commit built,
-# :<version> the newest build of the sidecar's VERSION (sidecar/discovery.ts) and :<line> the newest
-# of its compatible line (0.1 for 0.1.x, 1 for 1.x), which the installer pulls for the range the
-# module asks for. The label eu.einhq.api says the VERSION too. Built when a push to main changes
-# sidecar/, and at once when run by hand.
+# The devices sidecar's image (sidecar/Containerfile), published for installations to pull:
+# ghcr.io/einhq/devices:<version>, one image a release of the sidecar's sidecar/version.json, which
+# the module's release raises when commits touching sidecar/ call for it. Built from the module's
+# release tag (v<module version>, which the daily publish pushes) when that sidecar version has no
+# image yet, and never built again, so a version names one image. The label eu.einhq.version says
+# the version too. Run by hand on a tag, it builds that tag's sidecar version when it has no image.
 on:
   push:
-    branches: [main]
-    paths: ['sidecar/**', '.github/workflows/sidecar.yml']
+    tags: ['v*.*.*']
   workflow_dispatch:
 
 concurrency:
@@ -17,23 +16,42 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  image:
+  # Whether to build: a sidecar version that has its image already is left as it is.
+  check:
     # GitHub alone publishes: a Forgejo that runs this repository's workflows has no use for it.
     if: github.server_url == 'https://github.com'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      build: ${{ steps.check.outputs.build }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: check
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/devices
+        run: |
+          [[ $GITHUB_REF == refs/tags/v* ]] || { echo "$GITHUB_REF is not a release tag"; exit 1; }
+          version=$(jq -r .version sidecar/version.json)
+          [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "no release version in sidecar/version.json: $version"; exit 1; }
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+          if docker manifest inspect "$IMAGE:$version" >/dev/null 2>&1; then
+            echo "$IMAGE:$version exists"
+            echo build=false >>"$GITHUB_OUTPUT"
+          else
+            echo build=true >>"$GITHUB_OUTPUT"
+          fi
+
+  image:
+    needs: check
+    if: needs.check.outputs.build == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v7
-      - id: sha
-        run: |
-          echo "sha=$(git rev-parse --short=9 HEAD)" >>"$GITHUB_OUTPUT"
-          version=$(sed -n "s/^export const VERSION = '\([0-9]*\.[0-9]*\.[0-9]*\)';$/\1/p" sidecar/discovery.ts)
-          [ -n "$version" ] || { echo "no VERSION in sidecar/discovery.ts"; exit 1; }
-          major=${version%%.*} minor=${version#*.}
-          echo "version=$version" >>"$GITHUB_OUTPUT"
-          echo "line=$([ "$major" = 0 ] && echo "0.${minor%%.*}" || echo "$major")" >>"$GITHUB_OUTPUT"
       - uses: docker/setup-qemu-action@v4
       - uses: docker/setup-buildx-action@v4
       - uses: docker/login-action@v4
@@ -47,13 +65,10 @@ jobs:
           file: sidecar/Containerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/devices:main
-            ghcr.io/${{ github.repository_owner }}/devices:sha-${{ steps.sha.outputs.sha }}
-            ghcr.io/${{ github.repository_owner }}/devices:${{ steps.sha.outputs.version }}
-            ghcr.io/${{ github.repository_owner }}/devices:${{ steps.sha.outputs.line }}
+          tags: ghcr.io/${{ github.repository_owner }}/devices:${{ needs.check.outputs.version }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-            eu.einhq.api=${{ steps.sha.outputs.version }}
+            org.opencontainers.image.version=${{ needs.check.outputs.version }}
+            eu.einhq.version=${{ needs.check.outputs.version }}
             org.opencontainers.image.description=The Devices module's sidecar for EiN: an MQTT broker, a listener for devices on the network and a restreamer for cameras, run by compose from ein/deploy

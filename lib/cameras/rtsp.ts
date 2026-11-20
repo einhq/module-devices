@@ -11,10 +11,10 @@ import { type CameraKind, type CameraOptions, withCredentials } from './camera.t
 
 export const RTSP_DRIVER = 'rtsp';
 
-/** A camera's streams: the config field each address is in, and the endpoint it becomes. */
+/** A camera's streams: the config field each address is in, and the profile it is. */
 const STREAMS = [
-  { field: 'url', endpoint: 'main', label: 'Main stream' },
-  { field: 'sub', endpoint: 'sub', label: 'Smaller stream' },
+  { field: 'url', profile: 'main', label: 'Main stream' },
+  { field: 'sub', profile: 'sub', label: 'Smaller stream' },
 ] as const;
 
 export const rtspCamera = ({ devices }: CameraOptions): CameraKind => ({
@@ -31,7 +31,7 @@ export const rtspCamera = ({ devices }: CameraOptions): CameraKind => ({
     const config = attrs.config ?? {};
     const secret = await devices.secret(ADMIN_ACCESS, device);
     return STREAMS.filter((stream) => config[stream.field]).map((stream) => ({
-      endpoint: stream.endpoint,
+      profile: stream.profile,
       label: stream.label,
       address: withCredentials(config[stream.field], config.user, secret.password),
     }));

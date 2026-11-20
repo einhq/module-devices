@@ -4,8 +4,9 @@
  * --driver onvif --config address=192.0.2.10 --config user=admin --config password=…`). The password
  * is the device's secret.
  *
- * The camera says the rest itself: its largest profile is the `main` stream and its smallest the
- * `sub`, each with its codec, size and frame rate, given to the restreamer as `camera.ts` says. Its
+ * The camera says the rest itself: its largest profile is the `main` stream (`main.ts`) and its
+ * smallest the `sub` (`sub.ts`), each with its codec, size and frame rate, given to the restreamer as
+ * `camera.ts` says. Its
  * profiles and their addresses are asked again every hour, and each minute while it is offline.
  *
  * Its events come by a PullPoint, asked for what it has, each request waiting up to ten seconds for
@@ -229,11 +230,11 @@ export const onvifCamera = (options: CameraOptions): CameraKind => {
       if (attrs.online === false && camera.streams && Date.now() - camera.streams.at > 60_000) camera.streams = undefined;
       const streams = await streamsOf(camera);
       const out: CameraStream[] = [];
-      for (const [endpoint, profile] of [['main', streams.main], ['sub', streams.sub]] as const) {
+      for (const [name, profile] of [['main', streams.main], ['sub', streams.sub]] as const) {
         if (!profile) continue;
         out.push({
-          endpoint,
-          label: endpoint === 'main' ? 'Main stream' : 'Smaller stream',
+          profile: name,
+          label: name === 'main' ? 'Main stream' : 'Smaller stream',
           address: withCredentials(streams.addresses.get(profile.token)!, camera.user, camera.password),
           info: {
             ...(profile.codec ? { codec: profile.codec } : {}),

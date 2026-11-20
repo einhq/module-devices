@@ -1,10 +1,9 @@
 /**
  * The restreamer cameras are given to: go2rtc's HTTP API, in the devices sidecar
  * (`CFG_DEVICES_STREAMS_URL`, as the account `ein` with `CFG_DEVICES_STREAMS_KEY`). It keeps
- * one connection to each source it is given and serves it again: a JPEG of it now, MSE over a
- * WebSocket to a page, and RTSP to the media service, at `CFG_DEVICES_STREAMS_RTSP` as the media
- * service reaches it, as `ein` too. A source is named `<device>-<endpoint>`, and its address, with
- * the camera's password in it, never leaves the driver and the restreamer: go2rtc shows it masked.
+ * one connection to each source it is given and serves it again: MPEG-TS and fragmented MP4 to the driver, which writes them into the camera's stream nodes. A source is named
+ * `<device>-<profile>`, and its address, with the camera's password in it, never leaves the driver
+ * and the restreamer: go2rtc shows it masked.
  */
 
 import type { StreamInfo } from '@ein/api';
@@ -21,19 +20,25 @@ export type Restreamer = {
   /** Gives it `source` as `name`, in place of what it had under that name. */
   put(name: string, source: string): Promise<void>;
   remove(name: string): Promise<void>;
-  /** A JPEG of the source now; throws when the camera does not give one. */
-  frame(name: string): Promise<Uint8Array<ArrayBuffer>>;
-  /** What the source sends: its video's codec and whether it has sound. */
+  /** What the source sends, the restreamer connecting to the camera to see: its video's codec and whether it has sound; throws when it sends no picture. */
   probe(name: string): Promise<StreamInfo>;
-  /** Where a page watches it live: go2rtc's WebSocket, with the account's credentials. */
-  live(name: string): { url: string; headers: Record<string, string> };
-  /** Where the media service reads it: go2rtc's RTSP, with the account's credentials. */
-  rtsp(name: string): string;
+  /**
+   * The source from now until `signal` aborts or the restreamer ends it, H.264 or H.265 with its
+   * sound: as MPEG-TS (`ts`, go2rtc's `stream.ts`, which carries AAC sound alone), or as fragmented
+   * MP4 (`mp4`, its `stream.mp4`, a fragment a frame, with AAC sound or G.711 as FLAC).
+   */
+  stream(name: string, format: StreamFormat, signal: AbortSignal): Promise<ReadableStream<Uint8Array>>;
 };
+
+/** What the restreamer sends a source as: MPEG-TS or fragmented MP4. */
+export type StreamFormat = 'ts' | 'mp4';
+
+/** The query each format is asked with: MP4 takes G.711 sound too, as FLAC, which a browser plays. */
+const FORMAT_QUERY: Record<StreamFormat, Record<string, string>> = { ts: {}, mp4: { mp4: 'flac' } };
 
 const TIMEOUT_MS = 12_000;
 
-export const createRestreamer = (fetcher: Fetch, base: string, password: string, rtspBase = ''): Restreamer => {
+export const createRestreamer = (fetcher: Fetch, base: string, password: string): Restreamer => {
   const root = base.replace(/\/+$/, '');
   const headers = { authorization: `Basic ${btoa(`ein:${password}`)}` };
   const ask = async (method: string, path: string, query: Record<string, string>): Promise<Response> => {
@@ -48,20 +53,20 @@ export const createRestreamer = (fetcher: Fetch, base: string, password: string,
     names: async () => new Set(Object.keys(await (await ask('GET', '/api/streams', {})).json() ?? {})),
     put: async (name, source) => void await (await ask('PUT', '/api/streams', { name, src: source })).body?.cancel(),
     remove: async (name) => void await (await ask('DELETE', '/api/streams', { src: name })).body?.cancel(),
-    frame: async (name) => new Uint8Array(await (await ask('GET', '/api/frame.jpeg', { src: name })).arrayBuffer()),
     probe: async (name) => {
       const probed = await (await ask('GET', '/api/streams', { src: name, video: 'all', audio: 'all' })).json() as Probed;
       const codecs = (probed.producers ?? []).flatMap((producer) => producer.receivers ?? []).map((receiver) => receiver.codec ?? {});
       const video = codecs.find((codec) => codec.codec_type === 'video')?.codec_name;
-      return { ...(video ? { codec: video } : {}), audio: codecs.some((codec) => codec.codec_type === 'audio') };
+      if (!video) throw new Error('it sends no picture');
+      return { codec: video, audio: codecs.some((codec) => codec.codec_type === 'audio') };
     },
-    live: (name) => ({ url: `${root.replace(/^http/, 'ws')}/api/ws?${new URLSearchParams({ src: name })}`, headers }),
-    rtsp: (name) => {
-      if (!rtspBase) throw new Error('CFG_DEVICES_STREAMS_RTSP is not set, so no other service is told where a stream is');
-      const url = new URL(`${rtspBase.replace(/\/+$/, '')}/${encodeURIComponent(name)}`);
-      url.username = 'ein';
-      url.password = encodeURIComponent(password);
-      return url.toString();
+    stream: async (name, format, signal) => {
+      const response = await fetcher(`${root}/api/stream.${format}?${new URLSearchParams({ src: name, ...FORMAT_QUERY[format] })}`, { headers, signal });
+      if (!response.ok || !response.body) {
+        const text = (await response.text().catch(() => '')).trim();
+        throw new Error(`the restreamer answered ${response.status}${text ? `: ${text}` : ''}`);
+      }
+      return response.body;
     },
   };
 };

@@ -1,6 +1,6 @@
 import { Box, Skeleton, Stack, Text } from '@mantine/core';
 import { useDocumentVisibility } from '@mantine/hooks';
-import type { DeviceInfo } from '@ein/api';
+import type { DeviceInfo, EndpointSummary } from '@ein/api';
 import { TablerIcon } from '@ein/ui/components';
 import { usePolledCommand } from '@ein/ui/hooks';
 import { formatTime, shq } from '@ein/ui/lib';
@@ -14,28 +14,33 @@ const TAPPED_LIVE_MS = 5 * 60_000;
 /** How long after a live stream failed or ended it is tried again. */
 const RETRY_LIVE_MS = 60_000;
 
-/** The URL of a frame of `device`'s `stream` now; `at` makes each one new. */
-const frameUrl = (device: string, stream: string, at: number): string => `/file/dev/${encodeURIComponent(device)}/${encodeURIComponent(stream)}?at=${at}`;
+/** The URL of a picture of `device`'s picture node `picture` now; `at` makes each one new. */
+const frameUrl = (device: string, picture: string, at: number): string => `/file/dev/${encodeURIComponent(device)}/${encodeURIComponent(picture)}?at=${at}`;
+
+/** An endpoint's name without its extension: `main.ts`, `main.mp4` and its picture node `main.jpg` are the same picture. */
+const stem = (name: string): string => name.replace(/\.[^.]+$/, '');
+
+const isPicture = (endpoint: EndpointSummary): boolean => endpoint.stream?.mimetype?.startsWith('image/') === true;
 
 /** A frame loaded: its URL and when it was asked for. */
 type Frame = { url: string; at: number };
 
 /**
- * A frame of the stream every `everyMs` while the page is seen, each loaded before it is shown so
- * the picture never blanks between two; the last one stays when a new one fails, and `failed`
- * says so.
+ * A picture from the picture node every `everyMs` while the page is seen, each loaded before it is
+ * shown so the picture never blanks between two; the last one stays when a new one fails, and
+ * `failed` says so.
  */
-function useFrames(device: string, stream: string | undefined, everyMs: number, enabled: boolean): { frame?: Frame; failed: boolean } {
+function useFrames(device: string, picture: string | undefined, everyMs: number, enabled: boolean): { frame?: Frame; failed: boolean } {
   const visible = useDocumentVisibility() === 'visible';
   const [frame, setFrame] = useState<Frame>();
   const [failed, setFailed] = useState(false);
-  useEffect(() => setFrame(undefined), [device, stream]);
+  useEffect(() => setFrame(undefined), [device, picture]);
   useEffect(() => {
-    if (!stream || !enabled || !visible) return;
+    if (!picture || !enabled || !visible) return;
     let live = true;
     const load = () => {
       const at = Date.now();
-      const url = frameUrl(device, stream, at);
+      const url = frameUrl(device, picture, at);
       const image = new Image();
       image.onload = () => {
         if (!live) return;
@@ -51,7 +56,7 @@ function useFrames(device: string, stream: string | undefined, everyMs: number, 
       live = false;
       clearInterval(timer);
     };
-  }, [device, stream, everyMs, enabled, visible]);
+  }, [device, picture, everyMs, enabled, visible]);
   return { frame, failed };
 }
 
@@ -68,9 +73,10 @@ function Quiet({ icon, children }: { icon: string; children: ReactNode }) {
 /**
  * `/cards/devices/camera`: a camera's picture filling the tile — a new one every `every`
  * seconds (10 unless set), or live when `live` is set — from its `stream`, its first unless named,
- * with its name and when the picture is from over its foot. A tap plays it live for five minutes,
- * or goes back to pictures; while a stream cannot be played live the card shows pictures, saying
- * why, and tries again each minute.
+ * from the picture node beside it, with its name and when the picture is from over its foot. A
+ * stream watched live is chosen over another of the same name (`main.mp4` for `main.ts`). A tap
+ * plays it live for five minutes, or goes back to pictures; while a stream cannot be played live the
+ * card shows pictures, saying why, and tries again each minute.
  * `fit=contain` shows the whole picture where it does not fill the tile.
  */
 export default function CameraCard() {
@@ -80,15 +86,20 @@ export default function CameraCard() {
   const alwaysLive = params.get('live') === 'true';
   const fit: CSSProperties['objectFit'] = params.get('fit') === 'contain' ? 'contain' : 'cover';
   const info = usePolledCommand<DeviceInfo>(`device-show ${shq(device)}`, device !== '', 60_000);
-  const streams = (info.data?.endpointList ?? []).filter((endpoint) => endpoint.type === 'stream' && !endpoint.retired);
-  const stream = streams.find((endpoint) => endpoint.name === params.get('stream')) ?? streams[0];
+  const all = (info.data?.endpointList ?? []).filter((endpoint) => endpoint.type === 'stream' && !endpoint.retired);
+  const videos = all.filter((endpoint) => !isPicture(endpoint));
+  const watched = videos.filter((endpoint) => endpoint.live);
+  const streams = watched.length ? watched : videos;
+  const named = params.get('stream');
+  const stream = streams.find((endpoint) => endpoint.name === named) ?? streams.find((endpoint) => named && stem(endpoint.name) === stem(named)) ?? streams[0];
+  const picture = stream && all.find((endpoint) => isPicture(endpoint) && stem(endpoint.name) === stem(stream.name));
 
   const [tappedAt, setTappedAt] = useState<number>();
   const [status, setStatus] = useState<LiveStatus>();
-  const wantsLive = alwaysLive || tappedAt !== undefined;
+  const wantsLive = stream?.live === true && (alwaysLive || tappedAt !== undefined);
   const live = wantsLive && status?.state !== 'failed' && status?.state !== 'ended';
   const playing = live && status?.state === 'playing';
-  const { frame, failed } = useFrames(device, stream?.name, everyMs, !playing);
+  const { frame, failed } = useFrames(device, picture?.name, everyMs, !playing);
   const onStatus = useCallback((next: LiveStatus) => setStatus(next), []);
 
   useEffect(() => {
@@ -109,7 +120,7 @@ export default function CameraCard() {
   }
   if (!stream) return <Quiet icon='video-off'>{info.data.label} sends no picture.</Quiet>;
 
-  const toggle = () => alwaysLive ? undefined : setTappedAt(tappedAt === undefined ? Date.now() : undefined);
+  const toggle = () => alwaysLive || !stream.live ? undefined : setTappedAt(tappedAt === undefined ? Date.now() : undefined);
   const why = wantsLive && !live ? status?.reason ?? 'it cannot be played live' : undefined;
   const when = playing ? 'Live' : frame ? formatTime(new Date(frame.at).toISOString(), { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : undefined;
   const offline = info.data.online === false;
@@ -119,8 +130,8 @@ export default function CameraCard() {
       h='100%'
       pos='relative'
       onClick={toggle}
-      title={alwaysLive ? undefined : tappedAt === undefined ? 'Watch it live' : 'Back to pictures'}
-      style={{ overflow: 'hidden', background: 'black', cursor: alwaysLive ? undefined : 'pointer' }}
+      title={alwaysLive || !stream.live ? undefined : tappedAt === undefined ? 'Watch it live' : 'Back to pictures'}
+      style={{ overflow: 'hidden', background: 'black', cursor: alwaysLive || !stream.live ? undefined : 'pointer' }}
     >
       {frame && !playing && <img src={frame.url} alt={info.data.label} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: fit }} />}
       {live && (

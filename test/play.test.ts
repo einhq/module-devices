@@ -15,7 +15,8 @@
  * while it is renewed and let go of when it is not.
  */
 
-import { assertEquals, assertRejects, assertStringIncludes } from '@std/assert';
+import { assert, assertEquals, assertMatch, assertRejects, assertStringIncludes } from '@std/assert';
+import { isStreamWriter } from '@ein/client';
 import { ADMIN_ACCESS, GUEST_ACCESS, SystemTestHarness } from '@ein/testing';
 import { NearbyFiles } from '../lib/network/nearby.ts';
 import { DEFAULT_SETTINGS, type Media, mediaAddress, MediaPlayer, type Status, Unreachable, type VideoStreamRequest, type Way, type WayCommand } from '../lib/network/play.ts';
@@ -267,11 +268,19 @@ Deno.test({ name: 'videos, pictures and pages written to a screen', sanitizeReso
       streamed.push({ path, request });
       return Promise.resolve(text(`${path} ${request.start ?? 0}+${request.duration ?? '∞'} ${request.format}`));
     },
-    streamPage: (route, access) => {
+    streamPage: async (route, access) => {
       const page = { route, uid: access.uid, stopped: false };
       pages.push(page);
-      const served = devices.serveLive((format) => Promise.resolve(text(`${route} as ${format}`)));
-      return Promise.resolve({ path: served.path, stop: () => Promise.resolve(void (page.stopped = true, served.end())) });
+      // Its two stream nodes, each started with what it is, as a reader joins it.
+      const path = `/tmp/page-${pages.length}`;
+      const writers = await Promise.all(['mp4', 'ts'].map(async (format) => {
+        await vfs.create(ADMIN_ACCESS, 'stream', '/tmp', `page-${pages.length}.${format}`, { attrs: { mimetype: format === 'mp4' ? 'video/mp4' : 'video/mp2t' } });
+        const writer = await vfs.open(ADMIN_ACCESS, `${path}.${format}`, { mode: 'w' });
+        assert(isStreamWriter(writer));
+        await writer.writeStart(new TextEncoder().encode(`${route} as ${format}`));
+        return writer;
+      }));
+      return { path, stop: async () => void (page.stopped = true, await Promise.all(writers.map((writer) => writer.close()))) };
     },
   });
   // As the Default Media Receiver: files, HLS and fragmented MP4, never MPEG-TS on its own.
@@ -282,6 +291,14 @@ Deno.test({ name: 'videos, pictures and pages written to a screen', sanitizeReso
   const read = async (url: string) => {
     const res = await fetch(url);
     return [res.status, await res.text()];
+  };
+  /** A live stream's status and its first bytes, read until then. */
+  const readStart = async (url: string) => {
+    const res = await fetch(url);
+    const reader = res.body!.getReader();
+    const { value } = await reader.read();
+    await reader.cancel();
+    return [res.status, new TextDecoder().decode(value)];
   };
   const last = (way: FakeWay) => way.loads[way.loads.length - 1].items;
 
@@ -387,11 +404,12 @@ Deno.test({ name: 'videos, pictures and pages written to a screen', sanitizeReso
       await player.play('tv', [cast], ...input('/films/boat.mp4\n/albums/Summer?slideshow=screen'));
       const [, page] = last(cast);
       assertEquals([page.contentType, page.live], ['video/mp4', true]);
-      assertEquals(await read(page.url), [200, '/albums/Summer?slideshow=screen as mp4']);
+      assertMatch(page.url, /\/file\/tmp\/page-1\.mp4\?ticket=/);
+      assertEquals(await readStart(page.url), [200, '/albums/Summer?slideshow=screen as mp4']);
       assertEquals(pages.map(({ route, uid, stopped }) => [route, uid, stopped]), [['/albums/Summer?slideshow=screen', ADMIN_ACCESS.uid, false]]);
       await player.play('tv', [renderer], ...input('/dashboard-wall/Kitchen'));
       assertEquals(pages[0].stopped, true);
-      assertEquals(await read(last(renderer)[0].url), [200, '/dashboard-wall/Kitchen as ts']);
+      assertEquals(await readStart(last(renderer)[0].url), [200, '/dashboard-wall/Kitchen as ts']);
       await player.command('tv', [renderer], { type: 'stop' });
       assertEquals(pages[1].stopped, true);
     });

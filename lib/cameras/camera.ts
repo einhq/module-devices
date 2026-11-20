@@ -1,32 +1,53 @@
 /**
- * What every camera driver does, whatever it asks the camera with: its streams are endpoints of type
- * `stream`, `main` and, when it has a second, smaller one, `sub`, each given to the restreamer as
- * `<device>-<endpoint>`, which keeps one connection to the camera however many watch it. A frame of
- * a stream is the restreamer's JPEG of it, and a page watches it live over the restreamer's
- * WebSocket, which core opens for the page. The restreamer is given the streams it lacks, as after
- * the sidecar started anew, every minute and whenever a frame or a page asks for one it does not
- * have. Every other minute the driver asks for a frame of the camera's smallest stream to know
- * whether it answers; the first frame and the restreamer's probe say what the stream is (its size,
- * codec and sound) where the camera did not. Another service, the media service, reads a stream at
- * the restreamer's RTSP (`source`). Without a restreamer, a frame is the camera's still picture,
- * when it has one, and nothing is watched live.
+ * What every camera driver does, whatever it asks the camera with: its profiles, `main` and, when it
+ * has a second, smaller one, `sub`, are each given to the restreamer as `<device>-<profile>`, which
+ * keeps one connection to the camera however many watch it, and are each two stream nodes the
+ * driver writes from the restreamer while anyone reads them (`StreamFeed`): `main.ts`, MPEG-TS, which
+ * the media service reads through a name it is granted, and `main.mp4`, fragmented MP4, which a
+ * page reads over `GET /file/…` to watch it live. The restreamer is given the streams it lacks, as
+ * after the sidecar started anew, every minute and whenever a reader asks for one it does not have.
+ * Without a restreamer nothing is written to the nodes, and there is no MP4 node to watch.
+ *
+ * Each profile also has a picture node, `main.jpg` and `sub.jpg`: a stream of JPEGs, a read of
+ * which is the latest picture, or the next when that is not fresh. The driver makes a picture only
+ * when a reader waits for one (the node's `wanted`): the media service's first frame of the
+ * profile's MPEG-TS node, or, without a restreamer, the camera's still picture.
+ *
+ * Every other minute the driver asks whether the camera answers: the restreamer's probe of its
+ * smallest stream, which also says the stream's codec and sound, or without a restreamer its still
+ * picture. The pictures say each stream's size where the camera did not; a stream whose size is
+ * not known yet gets a picture made for it then.
  *
  * A kind of camera (`rtsp`, `onvif`) says where its streams and still picture are, and may keep
  * endpoints of its own beside them.
  */
 
 import type { DeviceAttrs, DriverConfigField, EndpointAttrs, StreamInfo } from '@ein/api';
-import { ADMIN_ACCESS, type Command, type Driver, type ModuleDevices } from '@ein/client';
+import { ADMIN_ACCESS, type Command, type Driver, isStreamWriter, type ModuleDevices, type StreamWriter } from '@ein/client';
 import { DEV_PATH, devicePath } from '@ein/paths';
+import { streamPoster } from '@ems/client';
 import type { Fetch } from '../network/adopt.ts';
 import type { NetworkHosts } from '../network/found.ts';
-import { jpegSize, type Restreamer } from './restreamer.ts';
+import { StreamFeed } from './feed.ts';
+import { jpegSize, type Restreamer, type StreamFormat } from './restreamer.ts';
 
-/** The endpoints a camera's streams may be, largest first. */
-const STREAM_ENDPOINTS = ['main', 'sub'] as const;
+/** The profiles a camera's streams may be, largest first. */
+const STREAM_PROFILES = ['main', 'sub'] as const;
+
+/** Each profile's stream nodes: the format, which is the node's extension, and its media type. */
+const STREAM_FORMATS: { format: StreamFormat; mimetype: string }[] = [
+  { format: 'ts', mimetype: 'video/mp2t' },
+  { format: 'mp4', mimetype: 'video/mp4' },
+];
+
+/** What a picture node carries: one JPEG a write. */
+const PICTURE_MIMETYPE = 'image/jpeg';
 
 const CHECK_EVERY_MS = 60_000;
 const SNAPSHOT_TIMEOUT_MS = 10_000;
+
+/** How long after a picture could not be made the next is tried, while a reader still waits. */
+const PICTURE_RETRY_MS = 5_000;
 
 export type CameraOptions = {
   cmd: Command;
@@ -39,8 +60,8 @@ export type CameraOptions = {
   log(line: string): void;
 };
 
-/** One of a camera's streams: its endpoint, and its address with the camera's credentials in it. */
-export type CameraStream = { endpoint: (typeof STREAM_ENDPOINTS)[number]; label: string; address: string; info?: StreamInfo };
+/** One of a camera's streams: its profile, and its address with the camera's credentials in it. */
+export type CameraStream = { profile: (typeof STREAM_PROFILES)[number]; label: string; address: string; info?: StreamInfo };
 
 /** Where a camera's still picture is, and who it is asked as. */
 type CameraSnapshot = { url: string; user?: string; password?: string };
@@ -73,7 +94,13 @@ export const withCredentials = (address: string, user?: string, password?: strin
 };
 
 /** The restreamer's name for one of a device's streams. */
-export const sourceName = (device: string, endpoint: string): string => `${device}-${endpoint}`;
+export const sourceName = (device: string, profile: string): string => `${device}-${profile}`;
+
+/** A profile's stream node in `format`, `main.ts`. */
+const streamNode = (profile: string, format: StreamFormat): string => `${profile}.${format}`;
+
+/** A profile's picture node, `main.jpg`. */
+const pictureNode = (profile: string): string => `${profile}.jpg`;
 
 export const message = (error: unknown): string => error instanceof Error ? error.message : String(error);
 
@@ -88,7 +115,19 @@ export const startCameraDriver = (options: CameraOptions, kind: CameraKind): () 
   const failing = new Set<string>();
   /** The address each source was given the restreamer with, so one that moved is given again. */
   const given = new Map<string, string>();
+  /** Each stream node the driver writes, by its path. */
+  const feeds = new Map<string, StreamFeed>();
+  /** Stream nodes that could not be opened to write last time, so it is said once. */
+  const unfed = new Set<string>();
+  /** Each picture node the driver writes, by its path, with what stops it listening. */
+  const painters = new Map<string, { writer: StreamWriter; unlisten: () => void }>();
+  /** Picture nodes a picture is being made for now. */
+  const painting = new Set<string>();
+  /** Picture nodes whose picture could not be made last time, so it is said once. */
+  const unpainted = new Set<string>();
   let busy = false;
+  /** The formats its nodes are made in: without a restreamer nothing writes them, and the MP4 one, which a page would watch, is not offered. */
+  const formats = restreamer ? STREAM_FORMATS : STREAM_FORMATS.filter((each) => each.format === 'ts');
 
   const cameras = async () =>
     (await cmd.sys.vfs.children<DeviceAttrs>(ADMIN_ACCESS, DEV_PATH).catch(() => []))
@@ -98,35 +137,195 @@ export const startCameraDriver = (options: CameraOptions, kind: CameraKind): () 
   const attrsOf = async (device: string): Promise<DeviceAttrs | undefined> =>
     (await cmd.sys.vfs.get(ADMIN_ACCESS, devicePath(device)).catch(() => undefined))?.attrs as DeviceAttrs | undefined;
 
-  /** The camera's endpoints, and its streams given to the restreamer where it lacks them or has them at another address. */
+  /**
+   * The camera's endpoints, its streams given to the restreamer where it lacks them or has them at
+   * another address, and each stream node fed.
+   */
   const prepare = async (device: string, attrs: DeviceAttrs, have?: Set<string>): Promise<void> => {
     if (!attrs.class) await devices.ensureDevice(ADMIN_ACCESS, device, { class: 'camera' });
+    // Without a restreamer a picture is the camera's still picture: a camera with none has no picture nodes.
+    const pictured = restreamer !== undefined || (await kind.snapshot(device, attrs).catch(() => undefined)) !== undefined;
     for (const stream of await kind.streams(device, attrs)) {
-      await devices.ensureEndpoint(ADMIN_ACCESS, device, stream.endpoint, 'stream', { label: stream.label, ...stream.info });
-      const name = sourceName(device, stream.endpoint);
-      if (!restreamer || (have?.has(name) && given.get(name) === stream.address)) continue;
-      await restreamer.put(name, stream.address);
-      given.set(name, stream.address);
+      const paths = [];
+      for (const { format, mimetype } of formats) {
+        const path = await devices.ensureEndpoint(ADMIN_ACCESS, device, streamNode(stream.profile, format), 'stream', { label: stream.label, mimetype, ...stream.info });
+        paths.push({ format, mimetype, path });
+      }
+      const mp4 = streamNode(stream.profile, 'mp4');
+      if (!restreamer && await cmd.sys.vfs.get(ADMIN_ACCESS, `${devicePath(device)}/${mp4}`).then(() => true, () => false)) {
+        await devices.removeEndpoint(ADMIN_ACCESS, device, mp4);
+      }
+      if (pictured) {
+        const picture = await devices.ensureEndpoint(ADMIN_ACCESS, device, pictureNode(stream.profile), 'stream', {
+          label: `${stream.label}, a picture`,
+          mimetype: PICTURE_MIMETYPE,
+        });
+        await paintWhenAsked(device, stream.profile, picture);
+      }
+      const name = sourceName(device, stream.profile);
+      if (!restreamer) continue;
+      if (!have?.has(name) || given.get(name) !== stream.address) {
+        await restreamer.put(name, stream.address);
+        given.set(name, stream.address);
+      }
+      for (const { format, mimetype, path } of paths) await feed(device, stream.profile, format, mimetype, path);
     }
   };
 
-  /** A frame of the camera's smallest stream, which says whether it answers and what size each is. */
+  /**
+   * The stream node at `path` written from the restreamer while it is read, the driver holding it
+   * as its writer; a source the restreamer lost is given back when a reader comes for it.
+   */
+  const feed = async (device: string, profile: string, format: StreamFormat, mimetype: string, path: string): Promise<void> => {
+    if (!restreamer || (feeds.has(path) && !feeds.get(path)!.closed)) return;
+    try {
+      const writer = await cmd.sys.vfs.open(ADMIN_ACCESS, path, { mode: 'w' });
+      if (!isStreamWriter(writer)) {
+        await writer.close();
+        throw new Error('not a stream');
+      }
+      feeds.set(
+        path,
+        new StreamFeed(path, writer, mimetype, async (signal) => {
+          try {
+            return await restreamer.stream(sourceName(device, profile), format, signal);
+          } catch (error) {
+            const attrs = await attrsOf(device);
+            if (signal.aborted || !attrs || !await restate(device, attrs, profile)) throw error;
+            return await restreamer.stream(sourceName(device, profile), format, signal);
+          }
+        }, log),
+      );
+      unfed.delete(path);
+    } catch (error) {
+      if (!unfed.has(path)) log(`${path}: not written: ${message(error)}`);
+      unfed.add(path);
+    }
+  };
+
+  /**
+   * The picture node at `path` held as its writer, a picture made for it whenever a reader waits for
+   * one, and none otherwise.
+   */
+  const paintWhenAsked = async (device: string, profile: string, path: string): Promise<void> => {
+    if (painters.has(path) && !painters.get(path)!.writer.closed) return;
+    try {
+      const writer = await cmd.sys.vfs.open(ADMIN_ACCESS, path, { mode: 'w' });
+      if (!isStreamWriter(writer)) {
+        await writer.close();
+        throw new Error('not a stream');
+      }
+      const unlisten = writer.onWanted((wanted) => {
+        if (wanted) void paint(device, profile, path, writer);
+      });
+      painters.set(path, { writer, unlisten });
+      if (writer.wanted) void paint(device, profile, path, writer);
+    } catch (error) {
+      log(`${path}: not written: ${message(error)}`);
+    }
+  };
+
+  /** Pictures written into `writer` for as long as a reader waits for one, tried again a while after one could not be made. */
+  const paint = async (device: string, profile: string, path: string, writer: StreamWriter): Promise<void> => {
+    if (painting.has(path)) return;
+    painting.add(path);
+    try {
+      while (writer.wanted) {
+        const attrs = await attrsOf(device);
+        if (!attrs) return;
+        try {
+          await picture(device, attrs, profile, writer);
+          unpainted.delete(path);
+        } catch (error) {
+          if (!unpainted.has(path)) log(`${path}: ${message(error)}`);
+          unpainted.add(path);
+          await new Promise((resolve) => setTimeout(resolve, PICTURE_RETRY_MS));
+        }
+      }
+    } finally {
+      painting.delete(path);
+    }
+  };
+
+  /**
+   * A picture of `profile` now, written into `writer`: the media service's first frame of its stream
+   * node, or without a restreamer the camera's still picture. Its size is the stream's.
+   */
+  const picture = async (device: string, attrs: DeviceAttrs, profile: string, writer: StreamWriter): Promise<void> => {
+    let bytes: Uint8Array;
+    if (restreamer) {
+      const file = await Deno.makeTempFile({ prefix: 'ein-camera-', suffix: '.jpg' });
+      try {
+        await streamPoster(cmd, `${devicePath(device)}/${streamNode(profile, 'ts')}`, [{ output: file, format: 'jpeg', quality: 85 }]);
+        bytes = await Deno.readFile(file);
+      } finally {
+        await Deno.remove(file).catch(() => {});
+      }
+    } else {
+      bytes = await snapshotOf(device, attrs);
+    }
+    if (bytes.length === 0) throw new Error('the picture came empty');
+    if (writer.closed) return;
+    await writer.write(bytes);
+    const size = jpegSize(bytes);
+    if (!size) return;
+    for (const node of [...formats.map(({ format }) => streamNode(profile, format)), pictureNode(profile)]) {
+      const known = (await cmd.sys.vfs.get(ADMIN_ACCESS, `${devicePath(device)}/${node}`).catch(() => undefined))?.attrs as EndpointAttrs | undefined;
+      if (known && (known.width !== size.width || known.height !== size.height)) await devices.ensureEndpoint(ADMIN_ACCESS, device, node, 'stream', size);
+    }
+  };
+
+  /** A picture of `profile` made now and written, when its picture node is held. */
+  const paintNow = async (device: string, attrs: DeviceAttrs, profile: string): Promise<void> => {
+    const held = painters.get(`${devicePath(device)}/${pictureNode(profile)}`);
+    if (held && !held.writer.closed) await picture(device, attrs, profile, held.writer);
+  };
+
+  /** Stop writing the stream and picture nodes under `device`, or every one; their readers come to their end. */
+  const unfeed = async (device?: string): Promise<void> => {
+    const mine = (path: string) => device === undefined || path.startsWith(`${devicePath(device)}/`);
+    for (const [path, each] of feeds) {
+      if (!mine(path)) continue;
+      feeds.delete(path);
+      unfed.delete(path);
+      await each.close().catch(() => {});
+    }
+    for (const [path, each] of painters) {
+      if (!mine(path)) continue;
+      painters.delete(path);
+      unpainted.delete(path);
+      each.unlisten();
+      await each.writer.close().catch(() => {});
+    }
+  };
+
+  /**
+   * Whether the camera answers: the restreamer's probe of its smallest stream, which says each
+   * stream's codec and sound, or without one its still picture. A stream whose size is not known
+   * gets a picture made for it.
+   */
   const check = async (device: string, attrs: DeviceAttrs): Promise<void> => {
     checked.set(device, Date.now());
     try {
       const streams = await kind.streams(device, attrs);
+      const unsized: string[] = [];
       for (const stream of streams.toReversed()) {
-        const path = `${devicePath(device)}/${stream.endpoint}`;
+        const path = `${devicePath(device)}/${streamNode(stream.profile, 'ts')}`;
         const known = (await cmd.sys.vfs.get(ADMIN_ACCESS, path).catch(() => undefined))?.attrs as EndpointAttrs | undefined;
-        if (stream !== streams.at(-1) && known?.width && (!restreamer || known.audio !== undefined)) continue;
-        const info: StreamInfo = {};
-        const size = jpegSize(await frameOf(device, attrs, stream.endpoint));
-        if (size) Object.assign(info, size);
-        if (restreamer && known?.audio === undefined) Object.assign(info, await restreamer.probe(sourceName(device, stream.endpoint)));
-        await devices.ensureEndpoint(ADMIN_ACCESS, device, stream.endpoint, 'stream', info);
+        if (!known?.width) unsized.push(stream.profile);
+        if (restreamer && (stream === streams.at(-1) || known?.audio === undefined)) {
+          const info = await restreamer.probe(sourceName(device, stream.profile));
+          for (const { format } of formats) await devices.ensureEndpoint(ADMIN_ACCESS, device, streamNode(stream.profile, format), 'stream', info);
+        } else if (!restreamer && stream === streams.at(-1)) {
+          await paintNow(device, attrs, stream.profile);
+        }
       }
       await devices.online(ADMIN_ACCESS, device, true);
       silent.delete(device);
+      // A picture that could not be made says nothing of whether the camera answers: the media service may be away.
+      for (const profile of restreamer ? unsized : unsized.filter((profile) => profile !== streams.at(-1)?.profile)) {
+        await paintNow(device, attrs, profile).catch((error) => log(`${device}/${pictureNode(profile)}: ${message(error)}`));
+      }
     } catch (error) {
       if (!silent.has(device)) log(`${device}: ${message(error)}`);
       silent.add(device);
@@ -134,23 +333,16 @@ export const startCameraDriver = (options: CameraOptions, kind: CameraKind): () 
     }
   };
 
-  /** The camera's streams given to the restreamer when it lacks `endpoint`'s; answers whether it did. */
-  const restate = async (device: string, attrs: DeviceAttrs, endpoint: string): Promise<boolean> => {
+  /** The camera's streams given to the restreamer when it lacks `profile`'s; answers whether it did. */
+  const restate = async (device: string, attrs: DeviceAttrs, profile: string): Promise<boolean> => {
     const have = await restreamer!.names();
-    if (have.has(sourceName(device, endpoint))) return false;
+    if (have.has(sourceName(device, profile))) return false;
     await prepare(device, attrs, have);
     return true;
   };
 
-  const frameOf = async (device: string, attrs: DeviceAttrs, endpoint: string): Promise<Uint8Array<ArrayBuffer>> => {
-    if (restreamer) {
-      try {
-        return await restreamer.frame(sourceName(device, endpoint));
-      } catch (error) {
-        if (!await restate(device, attrs, endpoint)) throw error;
-        return await restreamer.frame(sourceName(device, endpoint));
-      }
-    }
+  /** The camera's still picture, asked of the camera itself. */
+  const snapshotOf = async (device: string, attrs: DeviceAttrs): Promise<Uint8Array<ArrayBuffer>> => {
     const snapshot = await kind.snapshot(device, attrs);
     if (!snapshot) throw new Error(`${device} has no still picture to give without a restreamer (CFG_DEVICES_STREAMS_URL)`);
     const response = await fetcher(snapshot.url, {
@@ -185,14 +377,6 @@ export const startCameraDriver = (options: CameraOptions, kind: CameraKind): () 
     }
   };
 
-  /** Where a page watches a stream live: the restreamer's socket; without one nothing is, so the driver gives no live view. */
-  const live: Driver['live'] = restreamer
-    ? async ({ device, endpoint, attrs }) => {
-      await restate(device, attrs, endpoint);
-      return restreamer.live(sourceName(device, endpoint));
-    }
-    : undefined;
-
   const unregister = devices.registerDriver(kind.name, {
     description: kind.description,
     module: 'devices',
@@ -209,21 +393,15 @@ export const startCameraDriver = (options: CameraOptions, kind: CameraKind): () 
       checked.delete(device);
       silent.delete(device);
       failing.delete(device);
+      await unfeed(device);
       await kind.forget?.(device);
       if (!restreamer) return;
-      for (const endpoint of STREAM_ENDPOINTS) {
-        given.delete(sourceName(device, endpoint));
-        await restreamer.remove(sourceName(device, endpoint)).catch(() => {});
+      for (const profile of STREAM_PROFILES) {
+        given.delete(sourceName(device, profile));
+        await restreamer.remove(sourceName(device, profile)).catch(() => {});
       }
     },
     ...(kind.write ? { write: kind.write } : {}),
-    frame: async ({ device, endpoint, attrs }) => ({ bytes: await frameOf(device, attrs, endpoint), type: 'image/jpeg' }),
-    source: async ({ device, endpoint, attrs }) => {
-      if (!restreamer) throw new Error('no restreamer is set (CFG_DEVICES_STREAMS_URL), so no other service reads a stream');
-      await restate(device, attrs, endpoint);
-      return restreamer.rtsp(sourceName(device, endpoint));
-    },
-    ...(live ? { live } : {}),
   });
 
   const timer = setInterval(() => tick().catch(() => {}), CHECK_EVERY_MS);
@@ -231,6 +409,7 @@ export const startCameraDriver = (options: CameraOptions, kind: CameraKind): () 
   return () => {
     clearInterval(timer);
     unregister();
+    void unfeed();
     kind.stop?.();
   };
 };

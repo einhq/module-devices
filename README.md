@@ -24,10 +24,17 @@ else that answers SNMP (uptime, load, memory, each volume's use, temperatures; t
 `devices-snmp <host> [oid]` walks what a device's agent answers. The `rtsp` driver takes a
 camera that sends its picture over RTSP, made by hand with `device-create 'Front door' --driver rtsp
 --config url=rtsp://… [--config sub=…] [--config user=…] --config password=…` (the password is the
-device's `.secret`): its streams are core's `stream` endpoints, `main` and `sub`, which the bridge
-gives the restreamer (`CFG_DEVICES_STREAMS_URL`, the sidecar's go2rtc) as `<device>-<endpoint>`,
-again whenever the restreamer lacks one. A frame of a stream is the restreamer's JPEG, and the
-**Live** tab on a camera's page plays it over MSE, through core's `/stream/dev/…` socket. The `http` driver asks a web
+device's `.secret`): its profiles, `main` and `sub`, go to the restreamer (`CFG_DEVICES_STREAMS_URL`,
+the sidecar's go2rtc) as `<device>-<profile>`, again whenever the restreamer lacks one, and are each
+two core `stream` endpoints, which the bridge writes from the restreamer while anyone reads them:
+`main.ts` and `sub.ts`, MPEG-TS, through which the media service watches a camera it is granted,
+and `main.mp4` and `sub.mp4`, fragmented MP4, cut into its header and fragments (`@ems/live/split`).
+Each profile also has a picture node, `main.jpg` and `sub.jpg`, a core stream of pictures: reading
+one gives the latest picture, and the bridge makes a picture only while someone waits for one, the
+media service's first frame of the profile's MPEG-TS, or without a restreamer the camera's still
+picture (`--config snapshot=…`). The **Live** tab on a camera's page reads the MP4 one over
+`GET /file/…` into a MediaSource; a browser that does not play its codec (HEVC) reads a
+transcode of it the media service makes for the page (`stream-transcode`). The `http` driver asks a web
 API that answers JSON, made by hand with `device-create <name> --driver http --config url=… --config
 read=…`: a device on the network with an API of its own, the weather, the price of electricity, each
 reading a path in the answer (`temperature=current.temperature_2m °C`,

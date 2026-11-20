@@ -39,8 +39,6 @@ export type RestreamerStatus = {
   /** False when no restreamer is set. */
   configured: boolean;
   url?: string;
-  /** Where the media service reads a stream (`CFG_DEVICES_STREAMS_RTSP`), which EiN cannot try. */
-  rtsp?: string;
   answering: boolean;
   /** The streams it has, when it answers. */
   streams?: number;

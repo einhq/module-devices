@@ -56,7 +56,7 @@ export type VideoStreamRequest = {
   format: 'mp4' | 'mpegts';
 };
 
-/** A page streamed as live video: where it is served (`/live/<id>`, without the format's extension), and how to stop it. */
+/** A page streamed as live video: its stream nodes, `<path>.mp4` and `<path>.ts`, and how to stop it. */
 type PageStreamed = { path: string; stop(): Promise<void> };
 
 /** What the media service makes now: videos as H.264 (`MediaHost.streamVideo`), and pages as video (`MediaHost.streamPage`). */
@@ -623,7 +623,7 @@ export class MediaPlayer {
     return [...hls, live('ts', 'video/mp2t'), live('mp4', 'video/mp4')];
   }
 
-  /** A page of EiN, as live video, in the forms a renderer and a Cast player take. */
+  /** A page of EiN, as live video, in the forms a renderer and a Cast player take: its stream node, read with a file ticket. */
   #page(route: string): Entry {
     const stream = this.host!.streamPage!;
     const page = (extension: 'ts' | 'mp4', contentType: string): Form => ({
@@ -631,7 +631,12 @@ export class MediaPlayer {
       live: true,
       make: async (access, address) => {
         const streamed = await stream(route, access);
-        return { url: `${address}${streamed.path}.${extension}`, release: () => void streamed.stop().catch(() => {}) };
+        const stop = () => void streamed.stop().catch(() => {});
+        const made = await this.#ticketed(`${streamed.path}.${extension}`, access, address).catch((error) => {
+          stop();
+          throw error;
+        });
+        return { ...made, release: () => (made.release(), stop()) };
       },
     });
     return { line: route, title: route, picture: false, forms: [page('ts', 'video/mp2t'), page('mp4', 'video/mp4')] };

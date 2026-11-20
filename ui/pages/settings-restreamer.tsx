@@ -5,7 +5,7 @@ import { SaveBar, settingOf, SettingSource, TablerIcon, useViewSave } from '@ein
 import { useCommand, useConfig } from '@ein/ui/hooks';
 import type { RestreamerStatus } from '@devices/api';
 
-type Draft = { url: string; rtsp: string; password: string };
+type Draft = { url: string; password: string };
 
 /** The host of an address, or the address itself when it is not one. */
 const hostOf = (url: string): string => {
@@ -16,17 +16,17 @@ const hostOf = (url: string): string => {
   }
 };
 
-/** Why an address does not start with one of `schemes`, or nothing when it does (or is empty, which is none). */
-const addressProblem = (url: string, schemes: string[], example: string): string | undefined => {
+/** Why an address is not an http(s) one, or nothing when it is (or is empty, which is none). */
+const addressProblem = (url: string): string | undefined => {
   const trimmed = url.trim();
-  if (!trimmed || schemes.some((scheme) => new RegExp(`^${scheme}://[^/\\s]+`).test(trimmed))) return undefined;
-  return `An address starts ${schemes.map((scheme) => `${scheme}://`).join(' or ')}, then the host and its port, such as ${example}.`;
+  if (!trimmed || /^https?:\/\/[^/\s]+/.test(trimmed)) return undefined;
+  return 'An address starts http:// or https://, then the host and its port, such as http://127.0.0.1:1984.';
 };
 
 /** Whether the restreamer answers, as a line with its mark. */
 function Answer({ status }: { status: RestreamerStatus }) {
   if (!status.configured) {
-    return <Text size='sm' c='dimmed'>No restreamer is set: a camera has no live view, and its picture is asked of the camera itself.</Text>;
+    return <Text size='sm' c='dimmed'>No restreamer is set: a camera has no live view and its video is not watched, and its picture is asked of the camera itself.</Text>;
   }
   return (
     <Group gap='xs' wrap='nowrap' align='flex-start'>
@@ -44,9 +44,8 @@ function Answer({ status }: { status: RestreamerStatus }) {
 
 /**
  * The restreamer, a settings view of devices' (`devices.restreamer`, a `settings.views`
- * panel): go2rtc's API, which cameras are given to and their live views and pictures come from
- * (`CFG_DEVICES_STREAMS_URL`), its RTSP as the media service reaches it
- * (`CFG_DEVICES_STREAMS_RTSP`) and the password of its account `ein`
+ * panel): go2rtc's API, which cameras are given to and their live views, pictures and video come
+ * from (`CFG_DEVICES_STREAMS_URL`), and the password of its account `ein`
  * (`CFG_DEVICES_STREAMS_KEY`), saved as one so the bridge restarts once; then whether it
  * answers that account (`devices-status --streams`).
  */
@@ -55,10 +54,9 @@ export default function RestreamerSettings() {
   const status = useCommand<RestreamerStatus>('devices-status --streams');
   const save = useViewSave();
   const url = settingOf(config.entries, 'CFG_DEVICES_STREAMS_URL');
-  const rtsp = settingOf(config.entries, 'CFG_DEVICES_STREAMS_RTSP');
   const key = settingOf(config.entries, 'CFG_DEVICES_STREAMS_KEY');
 
-  const saved = useMemo<Draft | undefined>(() => (url && rtsp ? { url: url.value, rtsp: rtsp.value, password: '' } : undefined), [url?.value, rtsp?.value]);
+  const saved = useMemo<Draft | undefined>(() => (url ? { url: url.value, password: '' } : undefined), [url?.value]);
   const [draft, setDraft] = useState<Draft | undefined>(saved);
   useEffect(() => setDraft(saved), [saved]);
 
@@ -70,12 +68,11 @@ export default function RestreamerSettings() {
     save.clear();
     setDraft({ ...draft, ...next });
   };
-  const dirty = draft.url.trim() !== saved.url || draft.rtsp.trim() !== saved.rtsp || draft.password !== '';
+  const dirty = draft.url.trim() !== saved.url || draft.password !== '';
   const sameHost = hostOf(draft.url) === hostOf(saved.url);
   const keySet = key.source !== 'default';
-  const urlProblem = addressProblem(draft.url, ['http', 'https'], 'http://127.0.0.1:1984');
-  const rtspProblem = addressProblem(draft.rtsp, ['rtsp', 'rtsps'], 'rtsp://127.0.0.1:8554');
-  const blocked = urlProblem ?? rtspProblem ??
+  const urlProblem = addressProblem(draft.url);
+  const blocked = urlProblem ??
     (!sameHost && !draft.password && key.source === 'environment' && draft.url.trim()
       ? "The password in the installation's .env belongs to the restreamer it names there; give this one its own."
       : undefined);
@@ -84,7 +81,6 @@ export default function RestreamerSettings() {
     const answers = [
       await config.saveAll({
         CFG_DEVICES_STREAMS_URL: draft.url.trim(),
-        CFG_DEVICES_STREAMS_RTSP: draft.rtsp.trim(),
         ...(draft.password ? { CFG_DEVICES_STREAMS_KEY: draft.password } : {}),
       }),
     ];
@@ -108,26 +104,12 @@ export default function RestreamerSettings() {
                 <SettingSource entry={url!} />
               </Group>
             }
-            description="go2rtc's API, which every camera is given to, and its live view and picture come from. setup.sh --devices runs one beside EiN and sets this. Empty, a camera has no live view, and its picture is asked of the camera itself."
+            description="go2rtc's API, which every camera is given to, and its live view, picture and video come from. setup.sh --devices runs one beside EiN and sets this. Empty, a camera has no live view and its video is not watched, and its picture is asked of the camera itself."
             placeholder='http://127.0.0.1:1984'
             value={draft.url}
             error={urlProblem}
             disabled={save.busy}
             onChange={(event) => change({ url: event.currentTarget.value })}
-          />
-          <TextInput
-            label={
-              <Group gap='xs' component='span'>
-                For the media service
-                <SettingSource entry={rtsp!} />
-              </Group>
-            }
-            description="The restreamer's RTSP as the media service reaches it, where it reads a camera's stream to watch it for faces. Empty, no camera is watched."
-            placeholder='rtsp://127.0.0.1:8554'
-            value={draft.rtsp}
-            error={rtspProblem}
-            disabled={save.busy}
-            onChange={(event) => change({ rtsp: event.currentTarget.value })}
           />
           <PasswordInput
             label={
@@ -156,7 +138,6 @@ export default function RestreamerSettings() {
             : status.loading
             ? <Skeleton height={20} />
             : <Text size='sm' c='dimmed'>{status.error?.message ?? 'No answer.'}</Text>}
-          {status.data?.configured && <Text size='xs' c='dimmed'>Whether the media service reaches the RTSP address is seen only when it watches a camera.</Text>}
         </Stack>
       </Paper>
     </Stack>
