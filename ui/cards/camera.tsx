@@ -154,7 +154,8 @@ export default function CameraCard() {
           display: 'flex',
           alignItems: 'baseline',
           gap: '0.6em',
-          padding: '2em 0.9em 0.6em',
+          // On a dashboard of hat pieces the picture fills the piece and its words keep clear of the edge.
+          padding: '2em var(--dash-inset-right, 0.9em) var(--dash-inset-bottom, 0.6em) var(--dash-inset-left, 0.9em)',
           background: 'linear-gradient(transparent, rgba(0, 0, 0, 0.7))',
           color: 'white',
           fontSize: 'clamp(0.75rem, 3.5cqmin, 1.2rem)',
@@ -170,11 +171,16 @@ export default function CameraCard() {
         <Text
           size='xs'
           pos='absolute'
-          top={8}
-          left={8}
-          right={8}
           c='white'
-          style={{ background: 'rgba(0, 0, 0, 0.55)', borderRadius: 'var(--mantine-radius-sm)', padding: '0.25em 0.6em', pointerEvents: 'none' }}
+          style={{
+            top: 'var(--dash-inset-top, 8px)',
+            left: 'var(--dash-inset-left, 8px)',
+            right: 'var(--dash-inset-right, 8px)',
+            background: 'rgba(0, 0, 0, 0.55)',
+            borderRadius: 'var(--mantine-radius-sm)',
+            padding: '0.25em 0.6em',
+            pointerEvents: 'none',
+          }}
         >
           Not live: {why}
         </Text>

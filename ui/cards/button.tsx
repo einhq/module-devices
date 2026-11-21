@@ -58,6 +58,108 @@ function Quiet({ icon, children }: { icon: string; children: ReactNode }) {
 }
 
 /**
+ * The button's look: the card is the button, a round knob in the middle of it carries the state,
+ * and its label and state stand under it, or beside it in a wide and short card. The knob is a dark
+ * disc ringed in the card's colour (`--dash-accent`, the app's accent outside a dashboard); lit, that
+ * colour in a gradient with a glow; asking for a second press, ringed in yellow and pulsing; waiting
+ * for the device, pulsing slowly. The card is a size container, so the knob and the words scale
+ * with the room it has, and the state goes where there is none for it.
+ */
+const STYLE = `
+.devices-button-card {
+  --button-accent: var(--dash-accent, var(--mantine-primary-color-filled));
+  container-type: size;
+  width: 100%;
+  height: 100%;
+  color: var(--mantine-color-text);
+}
+.devices-button-face {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6em;
+  height: 100%;
+  font-size: clamp(0.8rem, 7cqmin, 1.6rem);
+  text-align: center;
+}
+.devices-button-knob {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: clamp(30px, 56cqmin, 176px);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  color: color-mix(in srgb, var(--button-accent) 65%, white);
+  background: color-mix(in srgb, var(--button-accent) 14%, rgba(7, 10, 16, 0.55));
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--button-accent) 50%, transparent);
+  transition: background 200ms, box-shadow 200ms, color 200ms, transform 80ms, filter 160ms;
+}
+.devices-button-words {
+  display: grid;
+  gap: 0.15em;
+  min-width: 0;
+}
+.devices-button-state {
+  color: var(--mantine-color-dimmed);
+  font-size: 0.72em;
+}
+.devices-button-card[data-lit] .devices-button-knob {
+  color: color-mix(in srgb, var(--button-accent) 22%, black);
+  background: radial-gradient(circle at 35% 30%, color-mix(in srgb, var(--button-accent) 40%, white), var(--button-accent) 70%);
+  box-shadow: 0 0 0 0.3em color-mix(in srgb, var(--button-accent) 18%, transparent), 0 0 1.8em color-mix(in srgb, var(--button-accent) 45%, transparent);
+}
+.devices-button-card[data-lit] .devices-button-state {
+  color: color-mix(in srgb, var(--button-accent) 70%, white);
+}
+.devices-button-card[data-armed] .devices-button-knob {
+  box-shadow: inset 0 0 0 2px var(--mantine-color-yellow-5), 0 0 0 0.3em color-mix(in srgb, var(--mantine-color-yellow-5) 22%, transparent);
+  animation: devices-button-pulse 0.8s ease-in-out infinite alternate;
+}
+.devices-button-card[data-armed] .devices-button-state {
+  color: var(--mantine-color-yellow-4);
+}
+.devices-button-card[data-pending] .devices-button-knob {
+  animation: devices-button-pulse 1.2s ease-in-out infinite alternate;
+}
+.devices-button-card:not(:disabled):hover .devices-button-knob {
+  filter: brightness(1.15);
+}
+.devices-button-card:not(:disabled):active .devices-button-knob {
+  transform: scale(0.95);
+}
+.devices-button-card:disabled:not([data-pending]) {
+  opacity: 0.75;
+}
+@container (min-aspect-ratio: 11 / 5) {
+  .devices-button-face {
+    flex-direction: row;
+    gap: 0.9em;
+    text-align: start;
+  }
+  .devices-button-knob {
+    width: clamp(30px, 78cqh, 176px);
+  }
+}
+@container (max-height: 120px) and (max-aspect-ratio: 11 / 5) {
+  .devices-button-state {
+    display: none;
+  }
+}
+@keyframes devices-button-pulse {
+  to {
+    opacity: 0.6;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .devices-button-knob {
+    animation: none !important;
+    transition: none;
+  }
+}
+`;
+
+/**
  * `/cards/devices/button`: one large button for a device's control (`device`, `endpoint`), lit
  * while the control is what it sets. A momentary control is pressed; on and off is switched to the
  * other, or to `value` when one is given; any other control is set to `value`, as for a scene or a
@@ -141,33 +243,21 @@ export default function ButtonCard() {
       data-armed={armedAt !== undefined || undefined}
       data-pending={pending || busy || undefined}
       style={{
-        height: '100%',
-        width: '100%',
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: '0.4em',
-        padding: '0.6em',
-        borderRadius: 'var(--mantine-radius-md)',
-        fontSize: 'clamp(0.85rem, 7cqmin, 1.8rem)',
-        textAlign: 'center',
+        // On a dashboard of hat pieces the button fills the piece and what it says keeps clear of the edge.
+        padding: 'var(--dash-inset-top, 0.6em) var(--dash-inset-right, 0.6em) var(--dash-inset-bottom, 0.6em) var(--dash-inset-left, 0.6em)',
         cursor: endpoint.writable ? 'pointer' : 'default',
       }}
     >
-      <TablerIcon name={icon} size='2.2em' stroke={1.6} />
-      <Text inherit fw={650} lineClamp={2}>{label}</Text>
-      <Text inherit size='0.7em' c={lit || armedAt !== undefined ? undefined : 'dimmed'} style={{ opacity: 0.85 }}>{state}</Text>
-      <style>
-        {`.devices-button-card { color: var(--mantine-color-text); background: var(--mantine-color-default-hover); transition: background 160ms, color 160ms, transform 80ms; }
-.devices-button-card:not(:disabled):active { transform: scale(0.97); }
-.devices-button-card[data-lit] { background: var(--mantine-primary-color-filled); color: var(--mantine-primary-color-contrast); }
-.devices-button-card[data-armed] { background: var(--mantine-color-orange-filled); color: white; }
-.devices-button-card[data-pending] { animation: devices-button-pending 1.2s ease-in-out infinite alternate; }
-.devices-button-card:disabled:not([data-pending]) { opacity: 0.75; }
-@keyframes devices-button-pending { to { opacity: 0.6; } }
-@media (prefers-reduced-motion: reduce) { .devices-button-card { animation: none !important; transition: none; } }`}
-      </style>
+      <span className='devices-button-face'>
+        <span className='devices-button-knob'>
+          <TablerIcon name={icon} size='46%' stroke={1.8} />
+        </span>
+        <span className='devices-button-words'>
+          <Text className='devices-button-label' inherit fw={650} lineClamp={2}>{label}</Text>
+          <Text className='devices-button-state' inherit>{state}</Text>
+        </span>
+      </span>
+      <style>{STYLE}</style>
     </UnstyledButton>
   );
 }

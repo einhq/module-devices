@@ -13,7 +13,9 @@
  * - `STREAMS_PORT` (1984), the restreamer's HTTP API (sources, MPEG-TS, fragmented MP4);
  *   `STREAMS_PASSWORD`, required: the API's account `ein`, which it asks for from this machine too.
  *   EiN reads a source's MPEG-TS and fragmented MP4 from the API. go2rtc serves nothing else: its
- *   RTSP server and WebRTC are off.
+ *   RTSP server and WebRTC are off, and of its API only the paths EiN uses answer, so no one with
+ *   the password rewrites its config (where an `exec:` source would run a command) or restarts it.
+ *   It runs as the user `go2rtc`, not root.
  * - The listener's own settings (`DISCOVERY_INTERVAL`, `DISCOVERY_FORGET`, `DISCOVERY_PREFIX`),
  *   passed on to it.
  *
@@ -48,6 +50,10 @@ const STREAMS_PASSWORD = required('STREAMS_PASSWORD');
 
 const DATA = '/data/mqtt';
 const RUN = '/run/devices';
+/** The user go2rtc runs as, the Containerfile's `go2rtc`. */
+const RESTREAMER_USER = 'go2rtc';
+/** The API paths EiN uses (lib/cameras/restreamer.ts); go2rtc answers any other with 404. */
+const RESTREAMER_PATHS = ['/api/streams', '/api/stream.ts', '/api/stream.mp4'];
 /** An address to listen on in go2rtc's form: no host for every address. */
 const listen = (portNumber: number): string => `${BIND === '0.0.0.0' ? '' : BIND}:${portNumber}`;
 /** A YAML scalar: JSON's string is YAML's double-quoted one. */
@@ -77,7 +83,15 @@ const prepareBroker = async (): Promise<void> => {
   await run('chown', ['-R', 'mosquitto:mosquitto', DATA]);
 };
 
-/** go2rtc's config, which it also writes the sources EiN adds into while it runs. */
+/** A user's uid and gid, from /etc/passwd. */
+const account = async (name: string): Promise<{ uid: number; gid: number }> => {
+  const line = (await Deno.readTextFile('/etc/passwd')).split('\n').find((entry) => entry.startsWith(`${name}:`));
+  if (!line) throw new Error(`no user ${name}`);
+  const [, , uid, gid] = line.split(':');
+  return { uid: Number(uid), gid: Number(gid) };
+};
+
+/** go2rtc's config, which it also writes the sources EiN adds into while it runs, so it is go2rtc's. */
 const prepareRestreamer = async (): Promise<void> => {
   await Deno.writeTextFile(
     `${RUN}/go2rtc.yaml`,
@@ -87,6 +101,8 @@ const prepareRestreamer = async (): Promise<void> => {
       '  username: ein',
       `  password: ${quoted(STREAMS_PASSWORD)}`,
       '  local_auth: true',
+      '  allow_paths:',
+      ...RESTREAMER_PATHS.map((path) => `    - ${path}`),
       // RTSP and WebRTC, which go2rtc opens on 8554 and 8555 unless told not to, are off: EiN reads
       // what it needs from the API.
       'rtsp:',
@@ -99,7 +115,12 @@ const prepareRestreamer = async (): Promise<void> => {
       // No streams key: go2rtc adds it when the first source is added, and cannot add to `{}`.
       '',
     ].join('\n'),
+    { mode: 0o600 },
   );
+  const { uid, gid } = await account(RESTREAMER_USER);
+  await Deno.chown(`${RUN}/go2rtc.yaml`, uid, gid);
+  restreamer.uid = uid;
+  restreamer.gid = gid;
 };
 
 /** A command run to its end; throws when it fails. */
@@ -123,7 +144,18 @@ const waitForBroker = async (ms: number): Promise<void> => {
   }
 };
 
-type Child = { name: string; command: string; args: string[]; env?: Record<string, string>; process?: Deno.ChildProcess };
+type Child = {
+  name: string;
+  command: string;
+  args: string[];
+  env?: Record<string, string>;
+  uid?: number;
+  gid?: number;
+  process?: Deno.ChildProcess;
+};
+
+/** go2rtc, which prepareRestreamer gives its user's uid and gid. */
+const restreamer: Child = { name: 'streams', command: 'go2rtc', args: ['-config', `${RUN}/go2rtc.yaml`] };
 
 const children: Child[] = [
   { name: 'mqtt', command: 'mosquitto', args: ['-c', `${RUN}/mosquitto.conf`] },
@@ -133,7 +165,7 @@ const children: Child[] = [
     args: ['run', '--unstable-net', '--allow-net', '--allow-env', '--allow-run=cat', '--allow-sys=networkInterfaces', '/app/discovery.ts'],
     env: { MQTT_HOST: BIND, MQTT_PORT: String(MQTT_PORT), MQTT_USER: 'ein', MQTT_PASSWORD: EIN_PASSWORD },
   },
-  { name: 'streams', command: 'go2rtc', args: ['-config', `${RUN}/go2rtc.yaml`] },
+  restreamer,
 ];
 
 let stopping = false;
@@ -163,6 +195,8 @@ const keep = async (child: Child): Promise<void> => {
       child.process = new Deno.Command(child.command, {
         args: child.args,
         env: child.env,
+        uid: child.uid,
+        gid: child.gid,
         stdin: 'null',
         stdout: 'piped',
         stderr: 'piped',
@@ -200,7 +234,7 @@ if (import.meta.main) {
   Deno.addSignalListener('SIGTERM', stop);
   Deno.addSignalListener('SIGINT', stop);
   log(`broker on ${BIND}:${MQTT_PORT}, restreamer on ${BIND}:${STREAMS_PORT}`);
-  const [broker, listener, restreamer] = children;
+  const [broker, listener] = children;
   const running = [keep(broker)];
   await waitForBroker(10_000);
   running.push(keep(listener), keep(restreamer));
