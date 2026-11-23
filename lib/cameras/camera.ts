@@ -19,15 +19,17 @@
  * not known yet gets a picture made for it then.
  *
  * A kind of camera (`rtsp`, `onvif`) says where its streams and still picture are, and may keep
- * endpoints of its own beside them.
+ * endpoints of its own beside them. A stream is given the restreamer only at an rtsp or rtsps
+ * address with no `#`, which would give the restreamer options of its own, on a host the gate lets
+ * EiN ask (`gate.ts`); the still picture is asked through the gate.
  */
 
 import type { DeviceAttrs, DriverConfigField, EndpointAttrs, StreamInfo } from '@ein/api';
 import { ADMIN_ACCESS, type Command, type Driver, isStreamWriter, type ModuleDevices, type StreamWriter } from '@ein/client';
 import { DEV_PATH, devicePath } from '@ein/paths';
 import { streamPoster } from '@ems/client';
-import type { Fetch } from '../network/adopt.ts';
 import type { NetworkHosts } from '../network/found.ts';
+import { type AddressGate, readAtMost } from '../network/gate.ts';
 import { StreamFeed } from './feed.ts';
 import { jpegSize, type Restreamer, type StreamFormat } from './restreamer.ts';
 
@@ -45,6 +47,8 @@ const PICTURE_MIMETYPE = 'image/jpeg';
 
 const CHECK_EVERY_MS = 60_000;
 const SNAPSHOT_TIMEOUT_MS = 10_000;
+/** The largest still picture read. */
+const MAX_SNAPSHOT_BYTES = 20_000_000;
 
 /** How long after a picture could not be made the next is tried, while a reader still waits. */
 const PICTURE_RETRY_MS = 5_000;
@@ -54,7 +58,8 @@ export type CameraOptions = {
   devices: ModuleDevices;
   /** Unset when no restreamer is set (`CFG_DEVICES_STREAMS_URL`). */
   restreamer?: Restreamer;
-  fetcher: Fetch;
+  /** Where a camera's streams may be and its still picture is asked. */
+  gate: AddressGate;
   /** What the network listener heard, by which a camera found there is followed to a new address. */
   network?: NetworkHosts;
   log(line: string): void;
@@ -75,6 +80,8 @@ export type CameraKind = {
   streams(device: string, attrs: DeviceAttrs): Promise<CameraStream[]>;
   /** Its still picture, when it has one. */
   snapshot(device: string, attrs: DeviceAttrs): Promise<CameraSnapshot | undefined>;
+  /** Checks a camera's config when a person makes it or changes it; throws saying what is wrong. */
+  check?(attrs: DeviceAttrs): Promise<void>;
   /** Keeps what the camera has beside its streams, each minute and when it is made. */
   keep?(device: string, attrs: DeviceAttrs): Promise<void>;
   write?: Driver['write'];
@@ -93,6 +100,17 @@ export const withCredentials = (address: string, user?: string, password?: strin
   return url.toString();
 };
 
+/** Checks that `address` may be given the restreamer as a stream; throws saying why not. */
+export const checkStreamAddress = async (gate: AddressGate, address: string): Promise<void> => {
+  if (/[#\s]/.test(address)) throw new Error("a stream's address has no # or spaces in it");
+  // Not URL's own error, which would say the address and the password in it.
+  const url = URL.parse(address);
+  if (!url) throw new Error("a stream's address is rtsp://host/…");
+  if (url.protocol !== 'rtsp:' && url.protocol !== 'rtsps:') throw new Error(`a stream's address is rtsp or rtsps, not ${url.protocol}`);
+  // The restreamer looks the name up again itself.
+  await gate.check(url.hostname);
+};
+
 /** The restreamer's name for one of a device's streams. */
 export const sourceName = (device: string, profile: string): string => `${device}-${profile}`;
 
@@ -106,7 +124,7 @@ export const message = (error: unknown): string => error instanceof Error ? erro
 
 /** Registers `kind`'s driver and keeps its cameras' streams with the restreamer; the answer stops it. */
 export const startCameraDriver = (options: CameraOptions, kind: CameraKind): () => void => {
-  const { cmd, devices, restreamer, fetcher, log } = options;
+  const { cmd, devices, restreamer, gate, log } = options;
   /** When each camera was last asked for a frame. */
   const checked = new Map<string, number>();
   /** Cameras that did not answer last time, so it is said once. */
@@ -165,6 +183,7 @@ export const startCameraDriver = (options: CameraOptions, kind: CameraKind): () 
       const name = sourceName(device, stream.profile);
       if (!restreamer) continue;
       if (!have?.has(name) || given.get(name) !== stream.address) {
+        await checkStreamAddress(gate, stream.address);
         await restreamer.put(name, stream.address);
         given.set(name, stream.address);
       }
@@ -345,12 +364,15 @@ export const startCameraDriver = (options: CameraOptions, kind: CameraKind): () 
   const snapshotOf = async (device: string, attrs: DeviceAttrs): Promise<Uint8Array<ArrayBuffer>> => {
     const snapshot = await kind.snapshot(device, attrs);
     if (!snapshot) throw new Error(`${device} has no still picture to give without a restreamer (CFG_DEVICES_STREAMS_URL)`);
-    const response = await fetcher(snapshot.url, {
+    const response = await gate.fetch(snapshot.url, {
       headers: snapshot.user || snapshot.password ? { authorization: `Basic ${btoa(`${snapshot.user ?? ''}:${snapshot.password ?? ''}`)}` } : {},
       signal: AbortSignal.timeout(SNAPSHOT_TIMEOUT_MS),
     });
-    if (!response.ok) throw new Error(`its still picture answered ${response.status}`);
-    return new Uint8Array(await response.arrayBuffer());
+    if (!response.ok) {
+      await response.body?.cancel();
+      throw new Error(`its still picture answered ${response.status}`);
+    }
+    return await readAtMost(response, MAX_SNAPSHOT_BYTES, () => new Error(`its still picture is larger than ${MAX_SNAPSHOT_BYTES / 1_000_000} MB`));
   };
 
   /** Every camera's streams given to the restreamer where it lacks them, what else it has kept, and those due checked. */
@@ -384,6 +406,11 @@ export const startCameraDriver = (options: CameraOptions, kind: CameraKind): () 
     setup: async (device) => {
       const attrs = await attrsOf(device);
       if (!attrs) return;
+      try {
+        await kind.check?.(attrs);
+      } catch (error) {
+        throw new Error(`${kind.name} cannot watch ${device}: ${message(error)}; change its config with device-config ${device} name=value, or device-forget ${device}`);
+      }
       // A camera that does not answer yet is made all the same; the check says it is offline.
       await prepare(device, attrs).catch((error) => log(`${device}: ${message(error)}`));
       await kind.keep?.(device, attrs).catch((error) => log(`${device}: ${message(error)}`));

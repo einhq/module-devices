@@ -12,6 +12,7 @@ import { foundDevices, NetworkHosts } from '../lib/network/found.ts';
 import { identify, ownIdOf, rendererOf, webPageOf } from '../lib/network/identify.ts';
 import { parseIppResponse, printerAttributesRequest } from '../lib/network/ipp.ts';
 import { decodeCastMessage, encodeCastMessage } from '../lib/network/cast.ts';
+import { AddressGate } from '../lib/network/gate.ts';
 import { changesOf, createPolledDrivers, reach } from '../lib/network/polled.ts';
 import { checkHttpConfig, controlAddress, expandUrl, fetchAnswer, intervalOf, parseControls, parseReadings, readAnswer } from '../lib/network/http.ts';
 import { ippResponse, startSnmpAgent } from './fixtures.ts';
@@ -340,7 +341,7 @@ Deno.test({ name: 'the snmp driver reads a NAS: uptime, load, memory, its volume
   ]);
   const port = await agent.ready;
   try {
-    const snmp = createPolledDrivers(fetch).find((driver) => driver.name === 'snmp')!;
+    const snmp = createPolledDrivers(fetch, new AddressGate('')).find((driver) => driver.name === 'snmp')!;
     await t.step("a poll names each reading once, a volume by its mount, the system's own mounts left out", async () => {
       const polled = await snmp.poll({ name: 'attic-nas', ip: '127.0.0.1', snmpPort: port, config: {} });
       assertEquals(polled.entities.map((each) => each.entity), ['uptime', 'load', 'memory-used', 'c-used', 'c-free', 'cpu-temperature']);
@@ -423,7 +424,8 @@ Deno.test('the http driver reads what is named in an answer', async (t) => {
   });
 
   await t.step('a poll announces the readings as sensors, and fails when none is in the answer', async () => {
-    const http = createPolledDrivers(() => Promise.resolve(new Response('{"t":{"v":20}}'))).find((driver) => driver.name === 'http')!;
+    const fetcher = () => Promise.resolve(new Response('{"t":{"v":20}}'));
+    const http = createPolledDrivers(fetcher, new AddressGate('192.0.2.0/24', fetcher)).find((driver) => driver.name === 'http')!;
     const polled = await http.poll({ name: 'weather', ip: '', config: { url: 'http://192.0.2.1/', read: 't=t.v °C; rain=t.rain mm' } });
     assertEquals(polled.values, { t: 20 });
     assertEquals(polled.entities.map((each) => [each.entity, each.entityKind, each.unit, each.deviceClass]), [['t', 'sensor', '°C', 'temperature'], [
@@ -459,10 +461,11 @@ Deno.test('the http driver reads what is named in an answer', async (t) => {
 
   await t.step('a poll announces controls as switches and actions, a switch reading its state; a write asks its address', async () => {
     const asked: string[] = [];
-    const http = createPolledDrivers((url) => {
+    const fetcher: Fetch = (url) => {
       asked.push(url);
       return Promise.resolve(new Response('{"POWER":"ON","StatusSNS":{"ENERGY":{"Power":12}}}'));
-    }).find((driver) => driver.name === 'http')!;
+    };
+    const http = createPolledDrivers(fetcher, new AddressGate('192.0.2.0/24', fetcher)).find((driver) => driver.name === 'http')!;
     const device = {
       name: 'desk-plug',
       ip: '',
@@ -483,6 +486,23 @@ Deno.test('the http driver reads what is named in an answer', async (t) => {
     await http.write!(device, 'restart', null, ADMIN_ACCESS);
     assertEquals(asked.slice(1), ['http://192.0.2.32/cm?cmnd=Power%20OFF', 'http://192.0.2.32/cm?cmnd=Restart%201']);
     await assertRejects(() => http.write!(device, 'watts', 1, ADMIN_ACCESS), Error, 'watts cannot be set');
+  });
+
+  await t.step('an address off the public internet is asked only in a network the setting names, its controls too', async () => {
+    const asked: string[] = [];
+    const fetcher: Fetch = (url) => {
+      asked.push(url);
+      return Promise.resolve(new Response('{"v":1}'));
+    };
+    const http = createPolledDrivers(fetcher, new AddressGate('192.168.1.0/24', fetcher)).find((driver) => driver.name === 'http')!;
+    for (const url of ['http://127.0.0.1:8190/props', 'http://169.254.169.254/latest/meta-data/', 'http://10.89.0.4/', 'http://[::1]/', 'http://192.168.2.1/']) {
+      await assertRejects(async () => await http.check!({ url, read: 'v=v' }), Error, 'is not on the public internet', url);
+      await assertRejects(() => http.poll({ name: 'inside', ip: '', config: { url, read: 'v=v' } }), Error, 'is not on the public internet', url);
+    }
+    await assertRejects(async () => await http.check!({ url: 'http://192.168.1.5/', read: 'v=v', set: 'p=http://127.0.0.1/{value} 1/0' }), Error, 'CFG_DEVICES_NETWORKS');
+    assertEquals(asked, []);
+    await http.check!({ url: 'http://192.168.1.5/', read: 'v=v', set: 'p=/x?{value} 1/0' });
+    assertEquals((await http.poll({ name: 'plug', ip: '', config: { url: 'http://192.168.1.5/', read: 'v=v' } })).values, { v: 1 });
   });
 });
 

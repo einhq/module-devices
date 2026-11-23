@@ -43,7 +43,12 @@ Deno.test({ name: 'without a broker, the devices asked over the network are read
       'snmp',
     ]);
 
-    await admin.execString(`device-create Weather --driver http --config 'url=http://127.0.0.1:${server.addr.port}/' --config 'read=temperature=current.temperature_2m °C'`);
+    const create = `device-create Weather --driver http --config 'url=http://127.0.0.1:${server.addr.port}/' --config 'read=temperature=current.temperature_2m °C'`;
+    const refused = await admin.exec(create);
+    assertStringIncludes(refused.error ?? '', 'is not on the public internet; an administrator lets devices be asked there by naming its network in CFG_DEVICES_NETWORKS');
+    await admin.execString('device-forget weather && config set CFG_DEVICES_NETWORKS 127.0.0.1 && service restart devices-bridge');
+    await until('running', () => admin.execJson<DevicesStatus>('devices-status'), (status) => status.running);
+    await admin.execString(create);
     const info = await until('read', () => admin.execJson<DeviceInfo>('device-show weather'), (info) => info.online === true);
     assertEquals(info.endpointList.map((endpoint) => [endpoint.name, endpoint.last?.value]), [['temperature', 4.5]]);
 

@@ -23,7 +23,8 @@
  * `ptz-down`, `ptz-zoom-in` and `ptz-zoom-out`, a press turning it a short step.
  *
  * A camera added from the network keeps the id it was found under (`config.found`), and is asked at
- * the address the network listener last heard it at.
+ * the address the network listener last heard it at. The camera, and the addresses it names, are
+ * asked only on hosts the gate lets EiN ask (`gate.ts`).
  */
 
 import type { DeviceAttrs, EndpointAttrs } from '@ein/api';
@@ -116,7 +117,7 @@ const sleep = (ms: number, signal: AbortSignal) =>
   });
 
 export const onvifCamera = (options: CameraOptions): CameraKind => {
-  const { devices, fetcher, network, log } = options;
+  const { devices, gate, network, log } = options;
   const cameras = new Map<string, Camera>();
 
   /** The camera's device service, at the address it was last heard at when it was found on the network. */
@@ -137,7 +138,7 @@ export const onvifCamera = (options: CameraOptions): CameraKind => {
     const known = cameras.get(device);
     if (known?.key === key) return known;
     known?.events?.abort();
-    const camera: Camera = { key, onvif: createOnvif(fetcher, address, user, password), user, password };
+    const camera: Camera = { key, onvif: createOnvif(gate.fetch, address, user, password), user, password };
     cameras.set(device, camera);
     return camera;
   };
@@ -223,6 +224,8 @@ export const onvifCamera = (options: CameraOptions): CameraKind => {
       { name: 'user', label: 'User', type: 'string' },
       { name: 'password', label: 'Password', type: 'string', secret: true },
     ],
+
+    check: async (attrs) => void await gate.check(new URL(addressOf(attrs)).hostname),
 
     streams: async (device, attrs) => {
       const camera = await cameraOf(device, attrs);

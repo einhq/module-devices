@@ -26,6 +26,7 @@ import type { Access } from '@ein/client';
 import type { Fetch } from './adopt.ts';
 import { createCast as castWay } from './cast.ts';
 import { createDlna } from './dlna.ts';
+import type { AddressGate } from './gate.ts';
 import { type MediaHost, MediaPlayer, playSettings, type Way } from './play.ts';
 import { checkHttpConfig, controlAddress, deviceClassOfUnit, expandUrl, fetchAnswer, intervalOf, parseControls, parseReadings, readAnswer, switchState } from './http.ts';
 import { getPrinterAttributes } from './ipp.ts';
@@ -63,7 +64,7 @@ export type PolledDriver = {
   /** What a person gives when making one of its devices; the host's address unless said. */
   config?: DriverConfigField[];
   /** Checks a device's config when a person makes it; throws saying what is wrong. */
-  check?(config: Record<string, string>): void;
+  check?(config: Record<string, string>): void | Promise<void>;
   /** What the device says now; throws when it does not answer. */
   poll(device: PolledDevice): Promise<{ entities: EntityUpdate[]; values: Record<string, DeviceValue> }>;
   /** Sends a value written to one of its controls, as `access`, the writer's; a word for the writer, when it has one. */
@@ -314,7 +315,8 @@ const createDlnaDriver = (fetcher: Fetch, media?: MediaHost): PolledDriver =>
     media,
   );
 
-const createHttp = (fetcher: Fetch): PolledDriver => ({
+/** The `http` driver, which asks only where `gate` lets it. */
+const createHttp = (gate: AddressGate): PolledDriver => ({
   name: 'http',
   description: 'A web API that answers JSON: a device on the network with an API of its own, the weather, the price of electricity; the readings and controls you name in it',
   intervalMs: intervalOf(undefined),
@@ -326,11 +328,13 @@ const createHttp = (fetcher: Fetch): PolledDriver => ({
     { name: 'set', label: 'Controls, as name=address on/off, with {value} in the address', type: 'string' },
     { name: 'interval', label: 'How often, in seconds or as 15m', type: 'string' },
   ],
-  check: checkHttpConfig,
+  check: async (config) => {
+    for (const address of checkHttpConfig(config)) await gate.check(address.hostname);
+  },
   poll: async (device) => {
     const readings = parseReadings(device.config.read ?? '');
     const controls = parseControls(device.config.set ?? '');
-    const values = readAnswer(await fetchAnswer(fetcher, expandUrl(device.config.url ?? '', new Date())), readings);
+    const values = readAnswer(await fetchAnswer(gate.fetch, expandUrl(device.config.url ?? '', new Date())), readings);
     if (!Object.keys(values).length) throw new Error('none of its readings is in the answer');
     for (const control of controls) {
       if (control.on === undefined || !(control.name in values)) continue;
@@ -354,18 +358,18 @@ const createHttp = (fetcher: Fetch): PolledDriver => ({
   write: async (device, endpoint, value) => {
     const control = parseControls(device.config.set ?? '').find((each) => each.name === endpoint);
     if (!control) throw new Error(`${endpoint} cannot be set`);
-    await fetchAnswer(fetcher, controlAddress(control, expandUrl(device.config.url ?? '', new Date()), value));
+    await fetchAnswer(gate.fetch, controlAddress(control, expandUrl(device.config.url ?? '', new Date()), value));
   },
 });
 
-/** The polled drivers, by name; without `media`, nothing written to a speaker or screen is played. */
-export const createPolledDrivers = (fetcher: Fetch, media?: MediaHost): PolledDriver[] => [
+/** The polled drivers, by name, the http driver asking only where `gate` lets it; without `media`, nothing written to a speaker or screen is played. */
+export const createPolledDrivers = (fetcher: Fetch, gate: AddressGate, media?: MediaHost): PolledDriver[] => [
   network,
   createIpp(fetcher),
   createSnmp(),
   createCast(fetcher, media),
   createDlnaDriver(fetcher, media),
-  createHttp(fetcher),
+  createHttp(gate),
 ];
 
 /** The names of the polled drivers. */

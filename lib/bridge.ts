@@ -24,6 +24,7 @@ import type { Restreamer } from './cameras/restreamer.ts';
 import { commandValue, type DeviceWriter } from './drivers.ts';
 import type { MqttConnect, MqttConnection, MqttMessage } from './mqtt.ts';
 import { NetworkHosts } from './network/found.ts';
+import type { AddressGate } from './network/gate.ts';
 import type { NearbyFiles } from './network/nearby.ts';
 import type { PolledDriver } from './network/polled.ts';
 import { startPoller } from './network/poller.ts';
@@ -41,8 +42,8 @@ type BridgeOptions = {
   polled: PolledDriver[];
   /** Where the cameras' streams are given; unset when none is set. */
   restreamer?: Restreamer;
-  /** What the cameras' still pictures are fetched with when there is no restreamer. */
-  fetcher: typeof fetch;
+  /** Where the cameras may be and are asked through. */
+  gate: AddressGate;
   devices: ModuleDevices;
   writer: DeviceWriter;
   /** What makes recordings and videos for screens near a browser; unset where nothing does. */
@@ -102,7 +103,7 @@ export const runBridge = async (options: BridgeOptions): Promise<void> => {
   const unregister = sources.map((source) => options.devices.registerDriver(source.name, driverOf(source)));
   const poller = startPoller({ cmd, devices: options.devices, writer, network, drivers: options.polled, log: (line) => log(line) });
   state.pollNow = poller.pollNow;
-  const cameraOptions = { cmd, devices: options.devices, restreamer: options.restreamer, fetcher: options.fetcher, network, log: (line: string) => log(line) };
+  const cameraOptions = { cmd, devices: options.devices, restreamer: options.restreamer, gate: options.gate, network, log: (line: string) => log(line) };
   const stopCameras = [rtspCamera, onvifCamera].map((kind) => startCameraDriver(cameraOptions, kind(cameraOptions)));
 
   const handle = (update: Update, source: RunningSource) => {

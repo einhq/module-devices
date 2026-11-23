@@ -12,7 +12,7 @@
  * are logged, and its presets and moves are controls.
  */
 
-import { assert, assertEquals } from '@std/assert';
+import { assert, assertEquals, assertStringIncludes } from '@std/assert';
 import type { DeviceInfo } from '@ein/api';
 import type { RestreamerStatus } from '../lib/api.ts';
 import { ADMIN_ACCESS, createTestContext } from '@ein/testing';
@@ -152,7 +152,7 @@ Deno.test('a camera address takes its user and password, unless it carries its o
 Deno.test({ name: 'rtsp cameras are given to the restreamer and watched through core, live only with one', sanitizeResources: false, sanitizeOps: false }, async (t) => {
   const restreamer = stubRestreamer('streams-secret');
   const ems = stubEms();
-  const testCtx = createTestContext({ modules: ['devices'], boot: true, env: { CFG_DEVICES_MQTT_URL: '' } });
+  const testCtx = createTestContext({ modules: ['devices'], boot: true, env: { CFG_DEVICES_MQTT_URL: '', CFG_DEVICES_NETWORKS: '127.0.0.1, 192.0.2.0/24' } });
   await testCtx.setup();
   const admin = await testCtx.server.createShellClient();
   let files: { stop: () => Promise<void> } | undefined;
@@ -184,6 +184,27 @@ Deno.test({ name: 'rtsp cameras are given to the restreamer and watched through 
         ['sub.ts', 'stream', { mimetype: 'video/mp2t', ...stream }, undefined],
       ]);
     });
+
+    await t.step(
+      'a stream is rtsp or rtsps without # on a host the setting allows, and the still picture http or https there; else nothing is given the restreamer',
+      async () => {
+        const before = [...restreamer.sources.keys()];
+        const refused = [
+          ['url=http://127.0.0.1:18999/cam', "url: a stream's address is rtsp or rtsps, not http:"],
+          ["'url=ffmpeg:/etc/passwd#video=h264'", "url: a stream's address has no # or spaces"],
+          ["'url=rtsp://192.0.2.10/main#backchannel=1'", "url: a stream's address has no # or spaces"],
+          ['url=rtsp://192.0.2.10/main --config sub=rtsp://169.254.169.254/sub', 'sub: 169.254.169.254 is not on the public internet'],
+          ['url=rtsp://192.0.2.10/main --config snapshot=http://169.254.169.254/latest/meta-data/', 'is not on the public internet'],
+          ['url=rtsp://192.0.2.10/main --config snapshot=file:///etc/passwd', 'snapshot is http or https'],
+        ];
+        for (const [config, error] of refused) {
+          const made = await admin.exec(`device-create Inside --driver rtsp --config ${config}`);
+          assertStringIncludes(made.error ?? '', error, config);
+          await admin.execString('device-forget inside');
+        }
+        assertEquals([...restreamer.sources.keys()], before);
+      },
+    );
 
     await t.step("a picture node read is the media service's first frame of the stream node, made when asked", async () => {
       // Past the last picture's freshness, so this read asks for one.
@@ -292,7 +313,7 @@ Deno.test({ name: 'onvif cameras give their profiles, events and turns', sanitiz
   const restreamer = stubRestreamer('streams-secret');
   const ems = stubEms();
   const camera = startOnvifCamera({ user: 'admin', password: 's3cret', clockOffsetMs: 5 * 60_000 });
-  const testCtx = createTestContext({ modules: ['devices'], boot: true, env: { CFG_DEVICES_MQTT_URL: '' } });
+  const testCtx = createTestContext({ modules: ['devices'], boot: true, env: { CFG_DEVICES_MQTT_URL: '', CFG_DEVICES_NETWORKS: '127.0.0.1, 192.0.2.0/24' } });
   await testCtx.setup();
   const admin = await testCtx.server.createShellClient();
   const show = () => admin.execJson<DeviceInfo>('device-show gate');

@@ -177,7 +177,7 @@ export const startPoller = (options: PollerOptions): Poller => {
         if (driver.check) {
           const attrs = (await cmd.sys.vfs.get(ADMIN_ACCESS, devicePath(device)).catch(() => undefined))?.attrs as DeviceAttrs | undefined;
           try {
-            driver.check(attrs?.config ?? {});
+            await driver.check(attrs?.config ?? {});
           } catch (error) {
             throw new Error(
               `${driver.name} cannot ask ${device}: ${message(error)}; change its config with device-config ${device} name=value, or device-forget ${device}`,

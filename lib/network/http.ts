@@ -23,6 +23,7 @@
 import { deviceName, type DeviceValue } from '@ein/api';
 import { parseDuration } from '../time.ts';
 import type { Fetch } from './adopt.ts';
+import { readAtMost } from './gate.ts';
 
 type Step =
   | { kind: 'field'; name: string }
@@ -148,17 +149,20 @@ export const expandUrl = (url: string, now: Date): string => {
   return url.replace(/\{(date|year|month|day|hour)\}/g, (_, name: string) => parts[name]);
 };
 
-/** Checks a device's config as a person gave it; throws saying what is wrong. */
-export const checkHttpConfig = (config: Record<string, string>): void => {
+/** Checks a device's config as a person gave it, answering the addresses it asks; throws saying what is wrong. */
+export const checkHttpConfig = (config: Record<string, string>): URL[] => {
   if (!config.url) throw new Error('it needs url, the address to ask');
   const url = new URL(expandUrl(config.url, new Date()));
   if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error(`url is http or https, not ${url.protocol}`);
   parseReadings(config.read ?? '');
   intervalOf(config.interval);
+  const addresses = [url];
   for (const control of parseControls(config.set ?? '')) {
     const address = new URL(control.address.replaceAll('{value}', ''), url);
     if (address.protocol !== 'http:' && address.protocol !== 'https:') throw new Error(`the control ${control.name} is http or https, not ${address.protocol}`);
+    addresses.push(address);
   }
+  return addresses;
 };
 
 const timeOf = (value: unknown): number => typeof value === 'string' || typeof value === 'number' ? new Date(value).getTime() : NaN;
@@ -209,7 +213,7 @@ export const readAnswer = (body: string, readings: HttpReading[], now = Date.now
   return values;
 };
 
-/** Asks `url` and answers its body; throws when it does not answer, or answers with an error. */
+/** Asks `url` and answers its body, read no further than `MAX_BYTES`; throws when it does not answer, or answers with an error. */
 export const fetchAnswer = async (fetcher: Fetch, address: string): Promise<string> => {
   const url = new URL(address);
   const headers: Record<string, string> = { accept: 'application/json, text/plain;q=0.9, */*;q=0.1' };
@@ -223,12 +227,5 @@ export const fetchAnswer = async (fetcher: Fetch, address: string): Promise<stri
     await response.body?.cancel();
     throw new Error(`${url.host} answered ${response.status} ${response.statusText}`.trim());
   }
-  const tooLong = () => new Error(`${url.host} answered more than ${MAX_BYTES / 1_000_000} MB`);
-  if (Number(response.headers.get('content-length')) > MAX_BYTES) {
-    await response.body?.cancel();
-    throw tooLong();
-  }
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  if (bytes.length > MAX_BYTES) throw tooLong();
-  return new TextDecoder().decode(bytes);
+  return new TextDecoder().decode(await readAtMost(response, MAX_BYTES, () => new Error(`${url.host} answered more than ${MAX_BYTES / 1_000_000} MB`)));
 };

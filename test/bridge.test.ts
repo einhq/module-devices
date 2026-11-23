@@ -34,7 +34,7 @@ Deno.test({ name: 'devices bridge', sanitizeResources: false, sanitizeOps: false
   const testCtx = createTestContext({
     modules: ['devices'],
     boot: true,
-    env: { CFG_DEVICES_MQTT_URL: broker.url, CFG_DEVICES_MIN_INTERVAL: '0' },
+    env: { CFG_DEVICES_MQTT_URL: broker.url, CFG_DEVICES_MIN_INTERVAL: '0', CFG_DEVICES_NETWORKS: '127.0.0.1' },
   });
   await testCtx.setup();
   const admin = await testCtx.server.createShellClient();

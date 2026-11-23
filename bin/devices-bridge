@@ -4,6 +4,8 @@
  * them as core's devices under /dev, one driver per source (ha-discovery, shelly), sending them what
  * is written to their controls, asks the devices of the polled drivers (network, ipp, snmp, cast,
  * dlna, http), and keeps the cameras of the rtsp driver with the restreamer (CFG_DEVICES_STREAMS_URL).
+ * The http driver and the cameras ask a host off the public internet only in a network
+ * CFG_DEVICES_NETWORKS names.
  * Videos and pages written to a screen are made into video by the media service, asked as this
  * service, once the writer's access has been checked; while the media service does not answer, or
  * makes neither, a screen is given only what it plays as it is. A recording or video a browser hands
@@ -17,7 +19,7 @@ import { type Access, type CmdReturn, type Command, serviceKey } from '@ein/clie
 import { runBridge } from '@devices/bridge';
 import { createRestreamer } from '@devices/cameras';
 import { DeviceWriter } from '@devices/drivers';
-import { createPolledDrivers, mediaAddress, MediaPlayer, NearbyFiles, type VideoStreamRequest } from '@devices/network';
+import { AddressGate, createPolledDrivers, mediaAddress, MediaPlayer, NearbyFiles, type VideoStreamRequest } from '@devices/network';
 import { connectMqtt } from '@devices/mqtt';
 import { createSources } from '@devices/sources';
 import { bridgeState } from '@devices/state';
@@ -79,9 +81,20 @@ const devicesBridge = async (cmd: Command): CmdReturn => {
       return { video: capabilities?.ops?.includes('video.stream') === true, pages: capabilities?.encode?.page_renderer === true };
     },
   };
-  const polled = createPolledDrivers(fetch, media);
+  let gate: AddressGate;
+  try {
+    gate = new AddressGate(cmd.env.CFG_DEVICES_NETWORKS ?? '');
+  } catch (error) {
+    await cmd.writeError(`devices-bridge: CFG_DEVICES_NETWORKS: ${error instanceof Error ? error.message : error}; only the public internet is asked\n`);
+    gate = new AddressGate('');
+  }
+  const polled = createPolledDrivers(fetch, gate, media);
   const nearby = new NearbyFiles(new MediaPlayer(media));
-  await runBridge({ cmd, url, connect, sources, polled, restreamer, fetcher: fetch, devices, writer, nearby, stopped });
+  try {
+    await runBridge({ cmd, url, connect, sources, polled, restreamer, gate, devices, writer, nearby, stopped });
+  } finally {
+    gate.close();
+  }
   return 0;
 };
 

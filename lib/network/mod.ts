@@ -17,6 +17,7 @@ import { foundDevices, type KnownDevice } from './found.ts';
 import { rendererOf, webPageOf } from './identify.ts';
 
 export { adoptShelly } from './adopt.ts';
+export { AddressGate } from './gate.ts';
 export { answersSnmp, createPolledDrivers, DEFAULT_COMMUNITY, POLLED_DRIVERS } from './polled.ts';
 export { NearbyFiles } from './nearby.ts';
 export { mediaAddress, MediaPlayer, type VideoStreamRequest } from './play.ts';
