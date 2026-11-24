@@ -85,6 +85,10 @@ export const startPoller = (options: PollerOptions): Poller => {
     };
   };
 
+  /** `where` with the device's secret, for a driver that asks for one. */
+  const withSecret = async (driver: PolledDriver, name: string, where: PolledDevice | undefined): Promise<PolledDevice | undefined> =>
+    where && driver.config?.some((field) => field.secret) ? { ...where, secret: await devices.secret(ADMIN_ACCESS, name) } : where;
+
   /** How often a device is asked: as its config says, else as its driver does. */
   const intervalOf = (attrs: DeviceAttrs): number => {
     const driver = byName.get(attrs.driver!)!;
@@ -103,7 +107,7 @@ export const startPoller = (options: PollerOptions): Poller => {
   const pollOne = async (name: string, attrs: DeviceAttrs) => {
     const driver = byName.get(attrs.driver!)!;
     asked.set(name, Date.now());
-    const where = locate(name, attrs);
+    const where = await withSecret(driver, name, locate(name, attrs));
     if (!announced.has(name)) {
       await writer.apply({ kind: 'device', device: name, label: attrs.label ?? name, manufacturer: attrs.manufacturer, model: attrs.model, mac: attrs.mac }, driver.name);
       announced.set(name, new Set());
@@ -159,7 +163,7 @@ export const startPoller = (options: PollerOptions): Poller => {
       ...(driver.write
         ? {
           write: async ({ device, endpoint, attrs, value, by, access }) => {
-            const where = locate(device, attrs);
+            const where = await withSecret(driver, device, locate(device, attrs));
             if (!where) throw new Error(`the address of ${device} is not known`);
             const answer = await driver.write!(where, endpoint, value, access);
             log(`${device}/${endpoint} set to ${String(value).replaceAll('\n', ', ')} by ${by}`);

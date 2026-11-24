@@ -7,7 +7,7 @@
  */
 
 import { assertEquals, assertExists, assertStringIncludes } from '@std/assert';
-import type { DeviceHistory, DeviceInfo, DriverSummary } from '@ein/api';
+import type { DeviceConfigAnswer, DeviceHistory, DeviceInfo, DriverSummary } from '@ein/api';
 import { createTestContext, type ShellClient, testCommands } from '@ein/testing';
 import type { AdoptAnswer, DevicesStatus, FoundAnswer, FoundDetail, NetworkHost } from '@devices/api';
 import { esphomeConfigs, esphomeStates, ippResponse, shellyButton, shellyColorLight, shellyGen1Plug, shellyPlug, startRenderer } from './fixtures.ts';
@@ -430,6 +430,9 @@ Deno.test({ name: 'devices bridge', sanitizeResources: false, sanitizeOps: false
         const today = new Date();
         const date = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
         assertEquals(asked[0], `/forecast/${date}.json Basic ${btoa('reader:pw')}`);
+        // The password went to the device's secret, out of the address anyone reading the device sees.
+        const config = await anna.execJson<DeviceConfigAnswer>('device-config weather');
+        assertEquals([config.config.url, config.config.user, config.secrets], [`http://127.0.0.1:${server.addr.port}/forecast/{date}.json`, 'reader', ['password']]);
 
         const refused = await anna.exec(`device-create Prices --driver http --config 'url=http://127.0.0.1/' --config 'read=price'`);
         assertEquals(refused.success, false);

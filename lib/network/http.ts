@@ -4,7 +4,9 @@
  *
  * - `url` — the address, which may name the day and hour it is asked at: `{date}` (2026-11-09),
  *   `{year}`, `{month}`, `{day}` and `{hour}`, two digits each but the year, in EiN's time zone.
- *   A user and password in it (`http://admin:secret@192.0.2.20/status`) are sent as basic auth.
+ * - `user` and `password` — sent as basic auth, to `url`'s host alone; the password is the device's
+ *   secret. A user and password written into `url` (`http://admin:secret@192.0.2.20/status`) are
+ *   taken out of it into these when the device is made or changed.
  * - `read` — the readings, `name=path [unit]`, separated by `;` or new lines:
  *   `temperature=current.temperature_2m °C; wind=current.wind_speed_10m m/s`.
  * - `interval` — how often it is asked: seconds, or `30s`, `15m`, `1h`; 5 minutes unless given,
@@ -21,9 +23,9 @@
  */
 
 import { deviceName, type DeviceValue } from '@ein/api';
+import { readAtMost } from '@ein/client';
 import { parseDuration } from '../time.ts';
 import type { Fetch } from './adopt.ts';
-import { readAtMost } from './gate.ts';
 
 type Step =
   | { kind: 'field'; name: string }
@@ -213,15 +215,23 @@ export const readAnswer = (body: string, readings: HttpReading[], now = Date.now
   return values;
 };
 
-/** Asks `url` and answers its body, read no further than `MAX_BYTES`; throws when it does not answer, or answers with an error. */
-export const fetchAnswer = async (fetcher: Fetch, address: string): Promise<string> => {
+/** Who a device of the http driver asks as, and the origin of its `url`, the only one told. */
+type HttpLogin = { origin: string; user?: string; password?: string };
+
+/** The login of a device whose `url` is `url`, as `user` with `password`; undefined without either. */
+export const loginOf = (url: string, user?: string, password?: string): HttpLogin | undefined =>
+  user || password ? { origin: new URL(url).origin, ...(user ? { user } : {}), ...(password ? { password } : {}) } : undefined;
+
+const base64 = (text: string): string => btoa(String.fromCharCode(...new TextEncoder().encode(text)));
+
+/**
+ * Asks `url` and answers its body, read no further than `MAX_BYTES`, as `login` when the address is
+ * at its origin; throws when it does not answer, or answers with an error.
+ */
+export const fetchAnswer = async (fetcher: Fetch, address: string, login?: HttpLogin): Promise<string> => {
   const url = new URL(address);
   const headers: Record<string, string> = { accept: 'application/json, text/plain;q=0.9, */*;q=0.1' };
-  if (url.username || url.password) {
-    headers.authorization = `Basic ${btoa(`${decodeURIComponent(url.username)}:${decodeURIComponent(url.password)}`)}`;
-    url.username = '';
-    url.password = '';
-  }
+  if (login && url.origin === login.origin) headers.authorization = `Basic ${base64(`${login.user ?? ''}:${login.password ?? ''}`)}`;
   const response = await fetcher(url.href, { headers, signal: AbortSignal.timeout(TIMEOUT_MS) });
   if (!response.ok) {
     await response.body?.cancel();

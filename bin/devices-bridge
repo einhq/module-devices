@@ -15,11 +15,11 @@
  * It runs until stopped, connecting again whenever the broker goes away.
  */
 
-import { type Access, type CmdReturn, type Command, serviceKey } from '@ein/client';
+import { type Access, type AddressGate, type CmdReturn, type Command, serviceKey } from '@ein/client';
 import { runBridge } from '@devices/bridge';
 import { createRestreamer } from '@devices/cameras';
 import { DeviceWriter } from '@devices/drivers';
-import { AddressGate, createPolledDrivers, mediaAddress, MediaPlayer, NearbyFiles, type VideoStreamRequest } from '@devices/network';
+import { createPolledDrivers, devicesGate, mediaAddress, MediaPlayer, NearbyFiles, type VideoStreamRequest } from '@devices/network';
 import { connectMqtt } from '@devices/mqtt';
 import { createSources } from '@devices/sources';
 import { bridgeState } from '@devices/state';
@@ -83,10 +83,10 @@ const devicesBridge = async (cmd: Command): CmdReturn => {
   };
   let gate: AddressGate;
   try {
-    gate = new AddressGate(cmd.env.CFG_DEVICES_NETWORKS ?? '');
+    gate = devicesGate(cmd.env.CFG_DEVICES_NETWORKS ?? '');
   } catch (error) {
     await cmd.writeError(`devices-bridge: CFG_DEVICES_NETWORKS: ${error instanceof Error ? error.message : error}; only the public internet is asked\n`);
-    gate = new AddressGate('');
+    gate = devicesGate('');
   }
   const polled = createPolledDrivers(fetch, gate, media);
   const nearby = new NearbyFiles(new MediaPlayer(media));

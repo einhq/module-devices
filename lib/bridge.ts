@@ -16,7 +16,7 @@
  * asked would surprise.
  */
 
-import type { Command, Driver, ModuleDevices } from '@ein/client';
+import type { AddressGate, Command, Driver, ModuleDevices } from '@ein/client';
 import { startCameraDriver } from './cameras/camera.ts';
 import { ONVIF_DRIVER, onvifCamera } from './cameras/onvif-driver.ts';
 import { RTSP_DRIVER, rtspCamera } from './cameras/rtsp.ts';
@@ -24,7 +24,6 @@ import type { Restreamer } from './cameras/restreamer.ts';
 import { commandValue, type DeviceWriter } from './drivers.ts';
 import type { MqttConnect, MqttConnection, MqttMessage } from './mqtt.ts';
 import { NetworkHosts } from './network/found.ts';
-import type { AddressGate } from './network/gate.ts';
 import type { NearbyFiles } from './network/nearby.ts';
 import type { PolledDriver } from './network/polled.ts';
 import { startPoller } from './network/poller.ts';

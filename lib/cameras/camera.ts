@@ -2,9 +2,10 @@
  * What every camera driver does, whatever it asks the camera with: its profiles, `main` and, when it
  * has a second, smaller one, `sub`, are each given to the restreamer as `<device>-<profile>`, which
  * keeps one connection to the camera however many watch it, and are each two stream nodes the
- * driver writes from the restreamer while anyone reads them (`StreamFeed`): `main.ts`, MPEG-TS, which
- * the media service reads through a name it is granted, and `main.mp4`, fragmented MP4, which a
- * page reads over `GET /file/…` to watch it live. The restreamer is given the streams it lacks, as
+ * driver writes from the restreamer while anyone reads them (`StreamFeed`): `main.ts`, MPEG-TS, with
+ * AAC sound alone, which the media service watches through a name it is granted, and `main.mp4`,
+ * fragmented MP4, with any sound the restreamer takes (G.711 as FLAC), which a page reads over
+ * `GET /file/…` to watch it live and the media service records clips from. The restreamer is given the streams it lacks, as
  * after the sidecar started anew, every minute and whenever a reader asks for one it does not have.
  * Without a restreamer nothing is written to the nodes, and there is no MP4 node to watch.
  *
@@ -25,11 +26,10 @@
  */
 
 import type { DeviceAttrs, DriverConfigField, EndpointAttrs, StreamInfo } from '@ein/api';
-import { ADMIN_ACCESS, type Command, type Driver, isStreamWriter, type ModuleDevices, type StreamWriter } from '@ein/client';
+import { type AddressGate, ADMIN_ACCESS, type Command, type Driver, isStreamWriter, type ModuleDevices, readAtMost, type StreamWriter } from '@ein/client';
 import { DEV_PATH, devicePath } from '@ein/paths';
 import { streamPoster } from '@ems/client';
 import type { NetworkHosts } from '../network/found.ts';
-import { type AddressGate, readAtMost } from '../network/gate.ts';
 import { StreamFeed } from './feed.ts';
 import { jpegSize, type Restreamer, type StreamFormat } from './restreamer.ts';
 

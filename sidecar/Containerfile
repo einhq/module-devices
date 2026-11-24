@@ -20,11 +20,13 @@ RUN apk add --no-cache mosquitto && \
     wget -qO /usr/local/bin/go2rtc "https://github.com/AlexxIT/go2rtc/releases/download/v${GO2RTC_VERSION}/go2rtc_linux_${arch}" && \
     echo "$sum  /usr/local/bin/go2rtc" | sha256sum -c - && \
     chmod 755 /usr/local/bin/go2rtc && \
-    adduser -S -D -H -h /nonexistent -s /sbin/nologin go2rtc
+    adduser -S -D -H -u 65532 -h /nonexistent -s /sbin/nologin ein && \
+    mkdir -p /run/devices && chmod 1777 /run/devices /deno-dir
 
 COPY supervisor.ts discovery.ts version.json /app/
 
-# Root in the container: the broker drops to its own user, the supervisor gives it its data, and it
-# starts go2rtc as the user go2rtc.
-USER root
+# The broker, the listener and go2rtc run as the supervisor's user, with no capabilities: ein,
+# uid 65532, unless the deployment gives it the user who owns its data folder (compose's user:),
+# so /run/devices and Deno's cache are any user's to write.
+USER ein
 ENTRYPOINT ["/tini", "--", "deno", "run", "--allow-env", "--allow-read", "--allow-write=/data,/run/devices", "--allow-run", "--allow-net=127.0.0.1", "/app/supervisor.ts"]

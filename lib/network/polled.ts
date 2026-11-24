@@ -22,13 +22,24 @@
  */
 
 import { deviceName, type DeviceValue, type DriverConfigField } from '@ein/api';
-import type { Access } from '@ein/client';
+import type { Access, AddressGate } from '@ein/client';
 import type { Fetch } from './adopt.ts';
 import { createCast as castWay } from './cast.ts';
 import { createDlna } from './dlna.ts';
-import type { AddressGate } from './gate.ts';
 import { type MediaHost, MediaPlayer, playSettings, type Way } from './play.ts';
-import { checkHttpConfig, controlAddress, deviceClassOfUnit, expandUrl, fetchAnswer, intervalOf, parseControls, parseReadings, readAnswer, switchState } from './http.ts';
+import {
+  checkHttpConfig,
+  controlAddress,
+  deviceClassOfUnit,
+  expandUrl,
+  fetchAnswer,
+  intervalOf,
+  loginOf,
+  parseControls,
+  parseReadings,
+  readAnswer,
+  switchState,
+} from './http.ts';
 import { getPrinterAttributes } from './ipp.ts';
 import { snmpGet, type SnmpValue, snmpWalk } from './snmp.ts';
 import type { DeviceChange, EntityUpdate } from '../sources/mod.ts';
@@ -50,6 +61,8 @@ export type PolledDevice = {
   snmpPort?: number;
   /** What a person gave its driver. */
   config: Record<string, string>;
+  /** What a person gave its driver that is secret, for a driver that asks for any. */
+  secret?: Record<string, string>;
 };
 
 export type PolledDriver = {
@@ -327,6 +340,8 @@ const createHttp = (gate: AddressGate): PolledDriver => ({
     { name: 'read', label: 'Readings, as name=path unit; name=path unit', type: 'string', required: true },
     { name: 'set', label: 'Controls, as name=address on/off, with {value} in the address', type: 'string' },
     { name: 'interval', label: 'How often, in seconds or as 15m', type: 'string' },
+    { name: 'user', label: 'User, when it asks for one', type: 'string' },
+    { name: 'password', label: 'Password', type: 'string', secret: true },
   ],
   check: async (config) => {
     for (const address of checkHttpConfig(config)) await gate.check(address.hostname);
@@ -334,7 +349,8 @@ const createHttp = (gate: AddressGate): PolledDriver => ({
   poll: async (device) => {
     const readings = parseReadings(device.config.read ?? '');
     const controls = parseControls(device.config.set ?? '');
-    const values = readAnswer(await fetchAnswer(gate.fetch, expandUrl(device.config.url ?? '', new Date())), readings);
+    const url = expandUrl(device.config.url ?? '', new Date());
+    const values = readAnswer(await fetchAnswer(gate.fetch, url, loginOf(url, device.config.user, device.secret?.password)), readings);
     if (!Object.keys(values).length) throw new Error('none of its readings is in the answer');
     for (const control of controls) {
       if (control.on === undefined || !(control.name in values)) continue;
@@ -358,7 +374,8 @@ const createHttp = (gate: AddressGate): PolledDriver => ({
   write: async (device, endpoint, value) => {
     const control = parseControls(device.config.set ?? '').find((each) => each.name === endpoint);
     if (!control) throw new Error(`${endpoint} cannot be set`);
-    await fetchAnswer(gate.fetch, controlAddress(control, expandUrl(device.config.url ?? '', new Date()), value));
+    const url = expandUrl(device.config.url ?? '', new Date());
+    await fetchAnswer(gate.fetch, controlAddress(control, url, value), loginOf(url, device.config.user, device.secret?.password));
   },
 });
 

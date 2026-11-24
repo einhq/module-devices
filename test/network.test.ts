@@ -12,9 +12,9 @@ import { foundDevices, NetworkHosts } from '../lib/network/found.ts';
 import { identify, ownIdOf, rendererOf, webPageOf } from '../lib/network/identify.ts';
 import { parseIppResponse, printerAttributesRequest } from '../lib/network/ipp.ts';
 import { decodeCastMessage, encodeCastMessage } from '../lib/network/cast.ts';
-import { AddressGate } from '../lib/network/gate.ts';
+import { devicesGate } from '../lib/network/gate.ts';
 import { changesOf, createPolledDrivers, reach } from '../lib/network/polled.ts';
-import { checkHttpConfig, controlAddress, expandUrl, fetchAnswer, intervalOf, parseControls, parseReadings, readAnswer } from '../lib/network/http.ts';
+import { checkHttpConfig, controlAddress, expandUrl, fetchAnswer, intervalOf, loginOf, parseControls, parseReadings, readAnswer } from '../lib/network/http.ts';
 import { ippResponse, startSnmpAgent } from './fixtures.ts';
 import { probeMatches } from '../sidecar/discovery.ts';
 import { snmpWalk } from '../lib/network/snmp.ts';
@@ -341,7 +341,7 @@ Deno.test({ name: 'the snmp driver reads a NAS: uptime, load, memory, its volume
   ]);
   const port = await agent.ready;
   try {
-    const snmp = createPolledDrivers(fetch, new AddressGate('')).find((driver) => driver.name === 'snmp')!;
+    const snmp = createPolledDrivers(fetch, devicesGate('')).find((driver) => driver.name === 'snmp')!;
     await t.step("a poll names each reading once, a volume by its mount, the system's own mounts left out", async () => {
       const polled = await snmp.poll({ name: 'attic-nas', ip: '127.0.0.1', snmpPort: port, config: {} });
       assertEquals(polled.entities.map((each) => each.entity), ['uptime', 'load', 'memory-used', 'c-used', 'c-free', 'cpu-temperature']);
@@ -412,20 +412,23 @@ Deno.test('the http driver reads what is named in an answer', async (t) => {
     assertEquals([intervalOf(undefined), intervalOf('120'), intervalOf('15m'), intervalOf('1')], [300_000, 120_000, 900_000, 10_000]);
   });
 
-  await t.step('basic auth from the address; an error answer is said', async () => {
+  await t.step("basic auth to the url's host alone; an error answer is said", async () => {
     const seen: [string, string | null][] = [];
     const fetcher = (url: string, init?: RequestInit) => {
       seen.push([url, new Headers(init?.headers).get('authorization')]);
       return Promise.resolve(url.endsWith('/gone') ? new Response('no', { status: 404, statusText: 'Not Found' }) : new Response('{"ok":1}'));
     };
-    assertEquals(await fetchAnswer(fetcher, 'http://admin:s%3Acret@192.0.2.20/status'), '{"ok":1}');
-    assertEquals(seen[0], ['http://192.0.2.20/status', `Basic ${btoa('admin:s:cret')}`]);
+    const login = loginOf('http://192.0.2.20/status', 'admin', 's:cret');
+    assertEquals(await fetchAnswer(fetcher, 'http://192.0.2.20/status', login), '{"ok":1}');
+    assertEquals(await fetchAnswer(fetcher, 'http://192.0.2.21/relay', login), '{"ok":1}');
+    assertEquals(seen, [['http://192.0.2.20/status', `Basic ${btoa('admin:s:cret')}`], ['http://192.0.2.21/relay', null]]);
+    assertEquals(loginOf('http://192.0.2.20/status'), undefined);
     await assertRejects(() => fetchAnswer(fetcher, 'http://192.0.2.20/gone'), Error, '192.0.2.20 answered 404 Not Found');
   });
 
   await t.step('a poll announces the readings as sensors, and fails when none is in the answer', async () => {
     const fetcher = () => Promise.resolve(new Response('{"t":{"v":20}}'));
-    const http = createPolledDrivers(fetcher, new AddressGate('192.0.2.0/24', fetcher)).find((driver) => driver.name === 'http')!;
+    const http = createPolledDrivers(fetcher, devicesGate('192.0.2.0/24', fetcher)).find((driver) => driver.name === 'http')!;
     const polled = await http.poll({ name: 'weather', ip: '', config: { url: 'http://192.0.2.1/', read: 't=t.v °C; rain=t.rain mm' } });
     assertEquals(polled.values, { t: 20 });
     assertEquals(polled.entities.map((each) => [each.entity, each.entityKind, each.unit, each.deviceClass]), [['t', 'sensor', '°C', 'temperature'], [
@@ -438,15 +441,15 @@ Deno.test('the http driver reads what is named in an answer', async (t) => {
   });
 
   await t.step("controls as each maker spells them, put in the address, from the device's", () => {
-    const status = 'http://admin:secret@192.0.2.32/cm?cmnd=Status%2010';
+    const status = 'http://192.0.2.32/cm?cmnd=Status%2010';
     const [tasmota] = parseControls('power=cm?cmnd=Power%20{value} ON/OFF');
-    assertEquals(controlAddress(tasmota, status, true), 'http://admin:secret@192.0.2.32/cm?cmnd=Power%20ON');
-    assertEquals(controlAddress(tasmota, status, false), 'http://admin:secret@192.0.2.32/cm?cmnd=Power%20OFF');
+    assertEquals(controlAddress(tasmota, status, true), 'http://192.0.2.32/cm?cmnd=Power%20ON');
+    assertEquals(controlAddress(tasmota, status, false), 'http://192.0.2.32/cm?cmnd=Power%20OFF');
     const [gen1, gen2, reboot] = parseControls('relay=http://192.0.2.31/relay/0?turn={value} on/off\nOn=/rpc/Switch.Set?id=0&on={value} true/false; reboot=/reboot');
     assertEquals(controlAddress(gen1, status, true), 'http://192.0.2.31/relay/0?turn=on');
     assertEquals([gen2.name, gen2.label], ['on', 'On']);
     assertEquals(controlAddress(gen2, 'http://192.0.2.33/rpc/Shelly.GetStatus', false), 'http://192.0.2.33/rpc/Switch.Set?id=0&on=false');
-    assertEquals([reboot.on, controlAddress(reboot, status, null)], [undefined, 'http://admin:secret@192.0.2.32/reboot']);
+    assertEquals([reboot.on, controlAddress(reboot, status, null)], [undefined, 'http://192.0.2.32/reboot']);
     assertThrows(() => controlAddress(tasmota, status, 50), Error, 'power is switched on or off, not set to 50');
   });
 
@@ -465,7 +468,7 @@ Deno.test('the http driver reads what is named in an answer', async (t) => {
       asked.push(url);
       return Promise.resolve(new Response('{"POWER":"ON","StatusSNS":{"ENERGY":{"Power":12}}}'));
     };
-    const http = createPolledDrivers(fetcher, new AddressGate('192.0.2.0/24', fetcher)).find((driver) => driver.name === 'http')!;
+    const http = createPolledDrivers(fetcher, devicesGate('192.0.2.0/24', fetcher)).find((driver) => driver.name === 'http')!;
     const device = {
       name: 'desk-plug',
       ip: '',
@@ -494,7 +497,7 @@ Deno.test('the http driver reads what is named in an answer', async (t) => {
       asked.push(url);
       return Promise.resolve(new Response('{"v":1}'));
     };
-    const http = createPolledDrivers(fetcher, new AddressGate('192.168.1.0/24', fetcher)).find((driver) => driver.name === 'http')!;
+    const http = createPolledDrivers(fetcher, devicesGate('192.168.1.0/24', fetcher)).find((driver) => driver.name === 'http')!;
     for (const url of ['http://127.0.0.1:8190/props', 'http://169.254.169.254/latest/meta-data/', 'http://10.89.0.4/', 'http://[::1]/', 'http://192.168.2.1/']) {
       await assertRejects(async () => await http.check!({ url, read: 'v=v' }), Error, 'is not on the public internet', url);
       await assertRejects(() => http.poll({ name: 'inside', ip: '', config: { url, read: 'v=v' } }), Error, 'is not on the public internet', url);
