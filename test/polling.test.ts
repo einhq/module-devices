@@ -30,9 +30,10 @@ Deno.test({ name: 'without a broker, the devices asked over the network are read
   const server = Deno.serve({ hostname: '127.0.0.1', port: 0, onListen: () => {} }, () => Response.json({ current: { temperature_2m: 4.5 } }));
   try {
     const status = await until('running', () => admin.execJson<DevicesStatus>('devices-status'), (status) => status.running);
-    assertEquals([status.configured, status.connected, status.drivers], [false, false, ['network', 'ipp', 'snmp', 'cast', 'dlna', 'http', 'rtsp', 'onvif']]);
+    assertEquals([status.configured, status.connected, status.drivers], [false, false, ['network', 'ipp', 'snmp', 'cast', 'dlna', 'browser', 'http', 'rtsp', 'onvif']]);
     const drivers = await admin.execJson<DriverSummary[]>('devices --drivers');
     assertEquals(drivers.filter((driver) => driver.module === 'devices' && driver.running).map((driver) => driver.name), [
+      'browser',
       'cast',
       'dlna',
       'http',

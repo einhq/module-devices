@@ -53,9 +53,10 @@ Deno.test({ name: 'devices bridge', sanitizeResources: false, sanitizeOps: false
 
     await t.step('the bridge connects and registers a driver for each source', async () => {
       const status = await until('connected', () => admin.execJson<DevicesStatus>('devices-status'), (status) => status.connected);
-      assertEquals(status.drivers, ['ha-discovery', 'shelly', 'shelly-gen1', 'network', 'ipp', 'snmp', 'cast', 'dlna', 'http', 'rtsp', 'onvif']);
+      assertEquals(status.drivers, ['ha-discovery', 'shelly', 'shelly-gen1', 'network', 'ipp', 'snmp', 'cast', 'dlna', 'browser', 'http', 'rtsp', 'onvif']);
       const drivers = await anna.execJson<DriverSummary[]>('devices --drivers');
       assertEquals(drivers.filter((driver) => driver.module === 'devices').map((driver) => [driver.name, driver.running]), [
+        ['browser', true],
         ['cast', true],
         ['dlna', true],
         ['ha-discovery', true],

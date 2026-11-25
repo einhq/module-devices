@@ -172,7 +172,17 @@ export const startPoller = (options: PollerOptions): Poller => {
           },
         }
         : {}),
+      ...(driver.input
+        ? {
+          input: async ({ device, attrs, bytes }) => {
+            const where = locate(device, attrs);
+            if (!where) throw new Error(`the address of ${device} is not known`);
+            return await driver.input!(where, attrs.label ?? device, bytes);
+          },
+        }
+        : {}),
       forget: async (device) => {
+        driver.forget?.(device);
         asked.delete(device);
         announced.delete(device);
         await writer.forget(device);

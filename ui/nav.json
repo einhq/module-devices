@@ -12,6 +12,24 @@
       }
     },
     {
+      "id": "devices.display",
+      "slot": "device.tabs",
+      "label": "Display",
+      "icon": "device-desktop",
+      "route": "/display-address?device={path}",
+      "when": {
+        "driver": "browser"
+      }
+    },
+    {
+      "id": "devices.browser-display",
+      "slot": "devices.header",
+      "label": "Browser display",
+      "icon": "device-desktop",
+      "route": "/browser-display-button",
+      "signedIn": true
+    },
+    {
       "id": "devices.found-devices",
       "slot": "devices.header",
       "label": "Found on the network",

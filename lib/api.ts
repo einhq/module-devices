@@ -1,6 +1,7 @@
 /**
- * The answers of devices' commands, for other modules (`@devices/api`). Import-free on purpose: a
- * page imports it without pulling in the module's commands.
+ * The answers of devices' commands, and what a browser display and its driver say to each other,
+ * for other modules and the module's pages (`@devices/api`). Import-free on purpose: a page imports
+ * it without pulling in the module's commands.
  */
 
 /** `devices-status`: the bridge and its drivers, as this process sees them. */
@@ -148,3 +149,75 @@ export type SnmpObject = { oid: string; type: string; value: string | number | n
  * recording or video has a transcript, is that WebVTT file the same way.
  */
 export type NearbyFile = { id: string; url: string; type: string; title: string; captions?: string };
+
+/** One thing a browser display is given to play or show: where it fetches it, its type, its title, and whether it is live (a page). */
+export type DisplayItem = { url: string; contentType: string; title: string; live?: boolean };
+
+/**
+ * What a browser display's driver tells it, numbered so the display takes each once: play `items`
+ * from `start`, `seconds` into it, in place of what it played; play, pause, stop or move on to the
+ * next; move to a second; set the volume (0 to 1) or the mute.
+ */
+export type DisplayMessage =
+  & { id: number }
+  & (
+    | { type: 'load'; items: DisplayItem[]; start: number; seconds: number }
+    | { type: 'play' | 'pause' | 'stop' | 'next' }
+    | { type: 'seek'; seconds: number }
+    | { type: 'volume'; level: number }
+    | { type: 'mute'; muted: boolean }
+  );
+
+/**
+ * What a browser display posts to its device, `/file/dev/<display>` with the device's key: what it
+ * plays now, as its driver's player asks a screen, and the last message it took. `epoch` is the
+ * driver's from its last reply: one that differs (the driver started again) takes the messages from
+ * the first. `wait` holds the answer until there is a message, or a while has passed; `bye` lets
+ * the device go, signed out.
+ */
+export type DisplayReport = {
+  seen: number;
+  epoch?: string;
+  wait?: boolean;
+  bye?: boolean;
+  /** The media types it plays, of those it was asked about (`DISPLAY_TYPES`). */
+  plays?: string[];
+  player: 'playing' | 'paused' | 'buffering' | 'idle';
+  /** The address of what it plays, as it was given. */
+  url?: string;
+  title?: string;
+  seconds?: number;
+  duration?: number;
+  /** 0 to 1. */
+  volume?: number;
+  muted?: boolean;
+  /** It stopped because it could not play `url`. */
+  failed?: boolean;
+};
+
+/** What the driver answers a display's report with (core's `DriverAnswer.reply`): the messages after the one it took, and what the device is called. */
+export type DisplayReply = { epoch: string; messages: DisplayMessage[]; label: string };
+
+/** The media types a browser display says whether it plays: those a screen is given in. */
+export const DISPLAY_TYPES = [
+  'video/mp4',
+  'video/webm',
+  'video/quicktime',
+  'video/x-matroska',
+  'video/mp2t',
+  'application/x-mpegurl',
+  'audio/mp4',
+  'audio/mpeg',
+  'audio/flac',
+  'audio/x-flac',
+  'audio/ogg',
+  'audio/wav',
+  'audio/x-wav',
+  'audio/webm',
+  'audio/aac',
+  'image/avif',
+  'image/webp',
+  'image/jpeg',
+  'image/png',
+  'image/gif',
+] as const;

@@ -13,6 +13,8 @@
  *   with a DLNA renderer beside Cast is one device, played on and asked over its renderer when Cast
  *   does not answer;
  * - `dlna`: a DLNA renderer, a TV's or a speaker's, the same over UPnP AV (`dlna.ts`);
+ * - `browser`: a browser showing the display page, the same, over its reports (`browser.ts`); asked
+ *   for nothing, it is offline while no browser shows it;
  * - `http`: a web API that answers JSON, at an address rather than a host (`http.ts`): a device's
  *   own, the weather, the price of electricity; the readings a person names in it, and
  *   the controls, each an address asked to set it.
@@ -21,9 +23,11 @@
  * makes endpoints of; a device that does not answer is offline.
  */
 
-import { deviceName, type DeviceValue, type DriverConfigField } from '@ein/api';
+import { deviceName, type DeviceValue, type DriverAnswer, type DriverConfigField } from '@ein/api';
 import type { Access, AddressGate } from '@ein/client';
+import type { DisplayReport } from '../api.ts';
 import type { Fetch } from './adopt.ts';
+import { BrowserDisplays } from './browser.ts';
 import { createCast as castWay } from './cast.ts';
 import { createDlna } from './dlna.ts';
 import { type MediaHost, MediaPlayer, playSettings, type Way } from './play.ts';
@@ -82,6 +86,10 @@ export type PolledDriver = {
   poll(device: PolledDevice): Promise<{ entities: EntityUpdate[]; values: Record<string, DeviceValue> }>;
   /** Sends a value written to one of its controls, as `access`, the writer's; a word for the writer, when it has one. */
   write?(device: PolledDevice, endpoint: string, value: DeviceValue, access: Access): Promise<{ message?: string } | void>;
+  /** What the device itself wrote to it (`label` is what it is called), answered; for a device that talks with its driver. */
+  input?(device: PolledDevice, label: string, bytes: Uint8Array): Promise<DriverAnswer>;
+  /** The device is being forgotten. */
+  forget?(device: string): void;
 };
 
 const entity = (device: string, name: string, more: Partial<EntityUpdate> & Pick<EntityUpdate, 'entityKind'>): EntityUpdate => ({
@@ -255,12 +263,14 @@ export const answersSnmp = (ip: string, community: string): Promise<boolean> => 
 
 const PLAYER_ACTIONS = ['play', 'pause', 'stop'] as const;
 
-/** What a person may set on a speaker or a screen, beside its address: how it takes videos and pictures (`play.ts`). */
-const PLAYER_CONFIG: DriverConfigField[] = [
-  { name: 'ip', label: 'Address on the network', type: 'string', required: true },
+/** What a person may set on a speaker or a screen: how it takes videos and pictures (`play.ts`). */
+const PLAY_CONFIG: DriverConfigField[] = [
   { name: 'video', label: "Videos as h264 (made so when they are not, the default), av1 (EiN's copy) or original", type: 'string' },
   { name: 'picture', label: 'Seconds a picture shows before the next (10)', type: 'number' },
 ];
+
+/** The same, beside its address. */
+const PLAYER_CONFIG: DriverConfigField[] = [{ name: 'ip', label: 'Address on the network', type: 'string', required: true }, ...PLAY_CONFIG];
 
 /**
  * A driver of speakers and screens that EiN plays on, reached by the ways `waysOf` gives a device:
@@ -268,13 +278,20 @@ const PLAYER_CONFIG: DriverConfigField[] = [
  * takes the paths of recordings, videos, pictures and pages, one a line, plays or shows them, and
  * says the path of the one it is on.
  */
-const createPlayerDriver = (name: string, description: string, waysOf: (device: PolledDevice) => Way[], media?: MediaHost): PolledDriver => {
+const createPlayerDriver = (
+  name: string,
+  description: string,
+  waysOf: (device: PolledDevice) => Way[],
+  media?: MediaHost,
+  more: Partial<PolledDriver> = {},
+): PolledDriver => {
   const player = new MediaPlayer(media);
   return {
     name,
     description,
     intervalMs: 15_000,
     config: PLAYER_CONFIG,
+    ...more,
     check: (config) => void playSettings(config),
     poll: async (device) => {
       const status = await player.status(device.name, waysOf(device));
@@ -327,6 +344,32 @@ const createDlnaDriver = (fetcher: Fetch, media?: MediaHost): PolledDriver =>
     (device) => [rendererOf(fetcher, device)],
     media,
   );
+
+/** The `browser` driver: a browser showing the display page, which reports to its device with the device's key. */
+const createBrowser = (media?: MediaHost): PolledDriver => {
+  const displays = new BrowserDisplays((device) => media?.wake?.(device));
+  return createPlayerDriver(
+    'browser',
+    'A browser showing the display page (/display, with the device key in its address) as a screen: what it plays, its volume and mute, play, pause and stop; the recordings, videos, pictures and pages whose paths are written to its show, played or shown full screen',
+    (device) => [displays.way(device.name)],
+    media,
+    {
+      addressed: false,
+      config: PLAY_CONFIG,
+      input: async (device, label, bytes) => {
+        let report: DisplayReport;
+        try {
+          report = JSON.parse(new TextDecoder().decode(bytes));
+        } catch {
+          throw new Error('a display reports what it plays as JSON');
+        }
+        if (typeof report !== 'object' || report === null || typeof report.seen !== 'number') throw new Error('a display reports what it plays as JSON');
+        return { reply: await displays.report(device.name, label, report) };
+      },
+      forget: (device) => displays.forget(device),
+    },
+  );
+};
 
 /** The `http` driver, which asks only where `gate` lets it. */
 const createHttp = (gate: AddressGate): PolledDriver => ({
@@ -386,11 +429,12 @@ export const createPolledDrivers = (fetcher: Fetch, gate: AddressGate, media?: M
   createSnmp(),
   createCast(fetcher, media),
   createDlnaDriver(fetcher, media),
+  createBrowser(media),
   createHttp(gate),
 ];
 
 /** The names of the polled drivers. */
-export const POLLED_DRIVERS: readonly string[] = ['network', 'ipp', 'snmp', 'cast', 'dlna', 'http'];
+export const POLLED_DRIVERS: readonly string[] = ['network', 'ipp', 'snmp', 'cast', 'dlna', 'browser', 'http'];
 
 /** What one poll says, as the changes the device writer applies. */
 export const changesOf = (device: string, polled: { entities: EntityUpdate[]; values: Record<string, DeviceValue> }, known: Set<string>): DeviceChange[] => [

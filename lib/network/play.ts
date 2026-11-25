@@ -26,7 +26,8 @@
  * address of its own, which the writer may read too.
  *
  * A device is one, whatever it speaks, and is reached by one or more ways: Google Cast (`cast.ts`)
- * and a DLNA renderer (`dlna.ts`) on a TV that has both. A list is given over the first way that
+ * and a DLNA renderer (`dlna.ts`) on a TV that has both, or a browser showing EiN's display page
+ * (`browser.ts`), which fetches each thing at the address it reached EiN at. A list is given over the first way that
  * answers, each thing in the form that way plays, and the device is then asked and told over that
  * one while it plays it.
  *
@@ -134,7 +135,12 @@ export type WayCommand =
 
 /** One protocol a device is reached by. */
 export type Way = {
-  kind: 'cast' | 'dlna';
+  kind: 'cast' | 'dlna' | 'browser';
+  /**
+   * EiN's address as the device fetches what it is given at, in place of `MediaHost.address`: empty
+   * for a browser, given paths on the address it reached EiN at.
+   */
+  address?: string;
   /** It plays a queue itself; else it is given each item when the one before ended. */
   queues: boolean;
   status(): Promise<Status>;
@@ -303,9 +309,9 @@ export class MediaPlayer {
     let asked: Promise<MediaService> | undefined;
     const service = () => asked ??= this.host?.mediaService?.() ?? Promise.resolve({ video: true, pages: true });
     const entries = await this.#entries(lines, access, settings, service);
-    const address = this.host?.address();
-    if (!address) throw new Error('EiN does not know its address on the network to give it: set CFG_DEVICES_MEDIA_URL');
     const { way, items } = await this.#first(ways, async (way) => {
+      const address = way.address ?? this.host?.address();
+      if (address === undefined) throw new Error('EiN does not know its address on the network to give it: set CFG_DEVICES_MEDIA_URL');
       const items = await this.#made(await this.#chosen(way, entries), access, address);
       try {
         items[0].made.prepare?.(0);
@@ -500,8 +506,8 @@ export class MediaPlayer {
   }
 
   async #regive(device: string, way: Way, given: Given): Promise<void> {
-    const address = this.host?.address();
-    if (!address) throw new Error('EiN no longer knows its address on the network');
+    const address = way.address ?? this.host?.address();
+    if (address === undefined) throw new Error('EiN no longer knows its address on the network');
     const items = await this.#made(given.items.slice(given.index), given.access, address);
     this.#drop(given.items);
     given.items = items;

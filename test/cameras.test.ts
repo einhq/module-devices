@@ -66,6 +66,34 @@ const useEms = async (admin: { execString(line: string): Promise<string> }, ems:
   return files;
 };
 
+/**
+ * A live stream: `first`, then a tick's chunks every 20 ms until its reader lets it go, which sets `ended`.
+ * The reader can let it go between two chunks of a tick, or drop it without cancelling it, so a chunk the stream no
+ * longer takes stops the timer too.
+ */
+const ticking = (reading: { ended: boolean }, tick: () => Uint8Array[], first?: Uint8Array): ReadableStream<Uint8Array> => {
+  let timer: ReturnType<typeof setInterval>;
+  const stop = () => {
+    clearInterval(timer);
+    reading.ended = true;
+  };
+  return new ReadableStream<Uint8Array>({
+    start: (controller) => {
+      if (first) controller.enqueue(first);
+      timer = setInterval(() => {
+        for (const chunk of tick()) {
+          try {
+            controller.enqueue(chunk);
+          } catch {
+            return stop();
+          }
+        }
+      }, 20);
+    },
+    cancel: stop,
+  });
+};
+
 /** go2rtc's API as far as the driver uses it, behind the account `ein` and `password`; a camera's still picture at `/snapshot.jpg`, as anyone. */
 const stubRestreamer = (password: string) => {
   const sources = new Map<string, string>();
@@ -82,23 +110,12 @@ const stubRestreamer = (password: string) => {
       const reading = { src, format: 'mp4', query: url.search, ended: false };
       read.push(reading);
       let n = 0;
-      let timer: ReturnType<typeof setInterval>;
+      // A keyframe's fragment every third, each cut across two chunks.
       return new Response(
-        new ReadableStream<Uint8Array>({
-          start: (controller) => {
-            controller.enqueue(mp4Header());
-            // A keyframe's fragment every third, each cut across two chunks.
-            timer = setInterval(() => {
-              const one = fragment(n % 3 === 0, ++n);
-              controller.enqueue(one.subarray(0, 30));
-              controller.enqueue(one.subarray(30));
-            }, 20);
-          },
-          cancel: () => {
-            clearInterval(timer);
-            reading.ended = true;
-          },
-        }),
+        ticking(reading, () => {
+          const one = fragment(n % 3 === 0, ++n);
+          return [one.subarray(0, 30), one.subarray(30)];
+        }, mp4Header()),
         { headers: { 'content-type': 'video/mp4' } },
       );
     }
@@ -107,23 +124,13 @@ const stubRestreamer = (password: string) => {
       const reading = { src, format: 'ts', query: url.search, ended: false };
       read.push(reading);
       let n = 0;
-      let timer: ReturnType<typeof setInterval>;
       // Packets cut across the chunks they come in, as a socket would cut them.
       return new Response(
-        new ReadableStream<Uint8Array>({
-          start: (controller) => {
-            timer = setInterval(() => {
-              const two = new Uint8Array(376);
-              two.set(packet(++n));
-              two.set(packet(++n), 188);
-              controller.enqueue(two.subarray(0, 100));
-              controller.enqueue(two.subarray(100));
-            }, 20);
-          },
-          cancel: () => {
-            clearInterval(timer);
-            reading.ended = true;
-          },
+        ticking(reading, () => {
+          const two = new Uint8Array(376);
+          two.set(packet(++n));
+          two.set(packet(++n), 188);
+          return [two.subarray(0, 100), two.subarray(100)];
         }),
         { headers: { 'content-type': 'video/mp2t' } },
       );
