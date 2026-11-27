@@ -1,21 +1,10 @@
 import { execCommand } from '@ein/ui/signals';
 import { shq } from '@ein/ui/lib';
 import { type CSSProperties, useEffect, useRef } from 'react';
-import { mediaTypeOf, Mp4Boxes } from './mp4.ts';
-
-/** How far behind the newest frame the picture may fall before it jumps ahead, in seconds. */
-const MAX_LAG_S = 2;
-
-/** How much of what has been played is kept, in seconds; the rest is let go. */
-const KEEP_S = 15;
+import { type LiveReading, mediaSourceClass, playLive, readLive } from '../media/live-mp4.ts';
 
 /** How long a transcode made for this page runs on once nobody reads it, in seconds. */
 const TRANSCODE_IDLE_S = 15;
-
-type MediaSourceClass = typeof MediaSource;
-
-/** Where a page's media comes from: Safari on an iPhone has only ManagedMediaSource. */
-const mediaSourceClass = (): MediaSourceClass | undefined => (globalThis as unknown as { ManagedMediaSource?: MediaSourceClass }).ManagedMediaSource ?? globalThis.MediaSource;
 
 export type LiveStatus = { state: 'connecting' | 'playing' | 'ended' | 'failed'; reason?: string };
 
@@ -26,25 +15,6 @@ const openStream = async (path: string, signal: AbortSignal): Promise<ReadableSt
   const response = await fetch(`/file${path.split('/').map(encodeURIComponent).join('/')}`, { signal, cache: 'no-store' });
   if (!response.ok || !response.body) throw new Error((await response.text().catch(() => '')).trim() || `the stream answered ${response.status}`);
   return response.body.getReader();
-};
-
-/** A stream read up to its header (`ftyp` and `moov`): the header, and the boxes after it that came with it. */
-const readHeader = async (reader: ReadableStreamDefaultReader<Uint8Array>, boxes: Mp4Boxes) => {
-  const head: Uint8Array[] = [];
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) throw new Error('the stream ended before its header');
-    const cut = boxes.feed(value);
-    const moov = cut.findIndex((box) => box.kind === 'moov');
-    if (moov < 0) {
-      head.push(...cut.map((box) => box.bytes));
-      continue;
-    }
-    head.push(...cut.slice(0, moov + 1).map((box) => box.bytes));
-    const header = new Uint8Array(head.reduce((total, part) => total + part.length, 0));
-    head.reduce((at, part) => (header.set(part, at), at + part.length), 0);
-    return { header, rest: cut.slice(moov + 1) };
-  }
 };
 
 /**
@@ -78,26 +48,12 @@ export function LivePlayer({ device, stream, onStatus, controls, style }: {
     let transcode: string | undefined;
     element.disableRemotePlayback = true;
 
-    /** A MediaSource on the element, once it is open. */
-    const attach = () =>
-      new Promise<MediaSource>((resolve) => {
-        const source = new Source();
-        const url = URL.createObjectURL(source);
-        source.addEventListener('sourceopen', () => {
-          URL.revokeObjectURL(url);
-          resolve(source);
-        }, { once: true });
-        element.src = url;
-      });
-
-    /** The reader and header of what is read, the stream moved to its transcode when the browser does not play its own codecs. */
-    const open = async () => {
-      const boxes = new Mp4Boxes();
-      const reader = await openStream(path, stop.signal);
-      const { header, rest } = await readHeader(reader, boxes);
-      const type = mediaTypeOf(header);
-      if (type && Source.isTypeSupported(type)) return { reader, boxes, header, rest, type };
-      await reader.cancel();
+    /** What is read, up to its header, the stream moved to its transcode when the browser does not play its own codecs. */
+    const open = async (): Promise<LiveReading & { type: string }> => {
+      const reading = await readLive(await openStream(path, stop.signal));
+      const { type } = reading;
+      if (type && Source.isTypeSupported(type)) return { ...reading, type };
+      await reading.reader.cancel();
       if (transcode) throw new Error(`this browser does not play the transcoded stream (${type ?? 'an unknown codec'})`);
       onStatus({ state: 'connecting', reason: 'Transcoding for this browser…' });
       try {
@@ -115,57 +71,10 @@ export function LivePlayer({ device, stream, onStatus, controls, style }: {
     };
 
     /** Play from one reading of the stream until it ends or sends a new header: whether it did. */
-    const play = async (): Promise<'ended' | 'header'> => {
-      const { reader, boxes, header, rest, type } = await open();
-      const source = await attach();
-      const buffer = source.addSourceBuffer(type);
-      buffer.mode = 'segments';
-      const waiting: Uint8Array[] = [header];
-      const append = () => {
-        if (buffer.updating || waiting.length === 0 || source.readyState !== 'open') return;
-        try {
-          buffer.appendBuffer(waiting.shift()! as Uint8Array<ArrayBuffer>);
-        } catch {
-          // A full buffer: what was played is let go at the next update.
-        }
-      };
-      buffer.addEventListener('updateend', () => {
-        if (stop.signal.aborted || buffer.updating) return;
-        if (waiting.length) return append();
-        const ranges = buffer.buffered;
-        if (!ranges.length) return;
-        const start = ranges.start(ranges.length - 1);
-        const end = ranges.end(ranges.length - 1);
-        // A reader joins at a keyframe some way back, and its times are the stream's: start near the newest frame.
-        if (element.currentTime < start || end - element.currentTime > MAX_LAG_S) element.currentTime = Math.max(start, end - 0.3);
-        if (element.currentTime - ranges.start(0) > KEEP_S) buffer.remove(ranges.start(0), element.currentTime - KEEP_S);
+    const play = async (): Promise<'ended' | 'header'> =>
+      await playLive(element, await open(), Source, stop.signal, () => {
+        element.play().then(() => onStatus({ state: 'playing' })).catch(() => onStatus({ state: 'playing', reason: 'press play' }));
       });
-      const push = (parts: Uint8Array[]) => {
-        if (!parts.length) return;
-        const bytes = new Uint8Array(parts.reduce((total, part) => total + part.length, 0));
-        parts.reduce((at, part) => (bytes.set(part, at), at + part.length), 0);
-        waiting.push(bytes);
-        append();
-      };
-      push(rest.map((box) => box.bytes));
-      append();
-      element.play().then(() => onStatus({ state: 'playing' })).catch(() => onStatus({ state: 'playing', reason: 'press play' }));
-      try {
-        while (true) {
-          const { value, done } = await reader.read();
-          if (done) return 'ended';
-          const cut = boxes.feed(value);
-          const again = cut.findIndex((box) => box.kind === 'ftyp');
-          if (again >= 0) {
-            push(cut.slice(0, again).map((box) => box.bytes));
-            return 'header';
-          }
-          push(cut.map((box) => box.bytes));
-        }
-      } finally {
-        await reader.cancel().catch(() => {});
-      }
-    };
 
     void (async () => {
       onStatus({ state: 'connecting' });

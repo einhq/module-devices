@@ -1,11 +1,12 @@
 /**
- * What the live view reads of a camera's fragmented MP4: its header's tracks named as a
- * MediaSource is asked about them (H.264, HEVC, AAC from its descriptors, FLAC), none for a codec
- * it cannot name, and the stream cut into whole boxes however its chunks cut them.
+ * What a page reads of a live fragmented MP4, a camera's or a page's streamed as video: its
+ * header's tracks named as a MediaSource is asked about them (H.264, HEVC, AAC from its
+ * descriptors, FLAC), none for a codec it cannot name, and the stream cut into whole boxes however
+ * its chunks cut them.
  */
 
 import { assertEquals } from '@std/assert';
-import { mediaTypeOf, Mp4Boxes } from '../ui/cameras/mp4.ts';
+import { mediaTypeOf, Mp4Boxes } from '../ui/media/mp4.ts';
 import { fragment, joined, mp4Header } from './mp4-boxes.ts';
 
 const box = (kind: string, ...body: (Uint8Array | number[])[]): Uint8Array => {

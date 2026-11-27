@@ -154,7 +154,8 @@ export class BrowserDisplays {
         }),
       pick: (types: string[]) => {
         const plays = this.#alive(device)?.report?.plays;
-        return Promise.resolve(plays ? types.find((type) => plays.includes(type)) : types[0]);
+        if (!plays) return Promise.reject(new Unreachable('no browser shows it now: open its display address'));
+        return Promise.resolve(types.find((type) => plays.includes(type)));
       },
     };
   }

@@ -2,6 +2,7 @@ import { Box, Button, Stack, Text, Title } from '@mantine/core';
 import { type CSSProperties, useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { DISPLAY_TYPES, type DisplayItem, type DisplayMessage, type DisplayReply, type DisplayReport } from '@devices/api';
+import { mediaSourceClass, playLive, readLive } from '../media/live-mp4.ts';
 
 /** Open to anyone, outside the frame: the browser acts with the device key in its address, not as whoever is signed in. */
 export const handle = { open: true, title: 'Display' };
@@ -36,6 +37,9 @@ const playable = (): string[] => {
   return plays = DISPLAY_TYPES.filter((type) => type.startsWith('image/') || probe.canPlayType(type) !== '');
 };
 
+/** Whether `item` is read into a MediaSource rather than by the element: a page streamed as MP4, where the browser has one. */
+const readsLive = (item: DisplayItem): boolean => item.live === true && item.contentType === 'video/mp4' && mediaSourceClass() !== undefined;
+
 /** How long a refused or failed report waits before the next, growing to the last. */
 const RETRY_MS = [1000, 2000, 5000, 10_000];
 /** The pointer is hidden, and the sign-out button, after this long without it moving. */
@@ -51,8 +55,9 @@ type Link = { state: 'none' } | { state: 'refused' } | { state: 'connecting' } |
  * browser display is given (`/display?device=<name>&key=<key>`), it keeps the device and its key in
  * the browser and takes them out of the address bar. It reports what it plays to its device and is
  * answered what to play, a report held until there is something (`DisplayReport`, `DisplayReply`),
- * and plays it full screen: a picture drawn, a recording or video played, one after the other, the
- * last picture kept until it is stopped. With nothing to play it waits, saying which screen it is.
+ * and plays it full screen: a picture drawn, a recording or video played, a page streamed as video
+ * read into a MediaSource and held at its newest frame, one after the other, the last picture kept
+ * until it is stopped. With nothing to play it waits, saying which screen it is.
  *
  * A browser goes full screen and plays sound only after a tap, so the first tap anywhere does both;
  * until then a video plays muted. Sign out lets the device go and forgets the key here. It draws no
@@ -241,6 +246,35 @@ export default function DisplayPage() {
     return () => element.removeEventListener('loadedmetadata', begin);
   }, [shown]);
 
+  // A page streamed as video is read as it comes, held at its newest frame, until it ends.
+  useEffect(() => {
+    const element = media.current;
+    const item = current();
+    const Source = mediaSourceClass();
+    if (!element || !item || !readsLive(item) || !Source) return;
+    const stop = new AbortController();
+    void (async () => {
+      try {
+        while (true) {
+          const response = await fetch(item.url, { signal: stop.signal, cache: 'no-store' });
+          if (!response.ok || !response.body) throw new Error(`the stream answered ${response.status}`);
+          const reading = await readLive(response.body.getReader());
+          const { type } = reading;
+          if (!type || !Source.isTypeSupported(type)) {
+            await reading.reader.cancel();
+            throw new Error(`this browser does not play ${type ?? 'its codecs'}`);
+          }
+          if (await playLive(element, { ...reading, type }, Source, stop.signal) === 'ended') break;
+        }
+        const now = shownRef.current;
+        if (!stop.signal.aborted && now) show(now.items, now.index + 1, 0);
+      } catch {
+        if (!stop.signal.aborted) setFailed(item.url);
+      }
+    })();
+    return () => stop.abort();
+  }, [shown]);
+
   useEffect(() => {
     const changed = () => setFullscreen(document.fullscreenElement !== null);
     document.addEventListener('fullscreenchange', changed);
@@ -312,7 +346,7 @@ export default function DisplayPage() {
         <video
           key={item.url}
           ref={media}
-          src={item.url}
+          src={readsLive(item) ? undefined : item.url}
           style={fill}
           playsInline
           preload='auto'
